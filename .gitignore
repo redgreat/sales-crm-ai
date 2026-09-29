@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- sales-crm-ai 本地运行数据 ----
+# 本地测试 PostgreSQL 数据目录与脚本产物
+.local/
+# 运行日志（已脱敏但仍属本地产物）
+logs/
+# dev.ps1 记录的进程归属文件
+*.pid
+*.runtime.json
+.env.local
+
+# ---- sales-crm-ai 本地配置（含密钥，不入库）----
+conf/config.yml
+
+# ---- frontend (SvelteKit) ----
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/

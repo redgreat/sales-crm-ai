@@ -1,0 +1,59 @@
+# sales-crm-ai 统一配置样例。
+# 复制为 conf/config.yml 后填写；config.yml 含密钥，不入库（已加入 .gitignore）。
+# 也可用环境变量 SAI_CONFIG 指定其他配置文件路径（只指路径，不承载密钥）。
+
+# 运行环境：dev / test / prod
+# prod 强制：model.provider 不得为 stub、auth.service_secret 必填、playground 禁用
+environment: dev
+
+# PostgreSQL（AI 专用库，业务表与 checkpoint 同库）
+database_url: postgresql://postgres:postgres@127.0.0.1:55432/sales_crm_ai
+db_pool_min: 1
+db_pool_max: 10
+
+# 模型：直连 Provider，不经任何网关
+model:
+  provider: stub            # stub（开发联调）| openai_compatible（直连供应商）
+  # base_url: https://api.example.com/v1
+  # api_key: 占位符-请替换
+  # name: your-model-name
+  temperature: 0.2
+  timeout_seconds: 60
+  max_retries: 2
+
+# 服务间认证（CRM -> AI 入站签名；与 CRM 集成层约定的 key/secret）
+auth:
+  service_key_id: crm-ai
+  service_secret: 占位符-请替换
+  timestamp_window_seconds: 300
+  nonce_ttl_seconds: 600
+
+# CRM 集成（AI -> CRM 出站授权事实查询；base_url 留空则不启用出站客户端）
+crm:
+  base_url: ""
+  key_id: ai-crm
+  secret: ""
+  timeout_seconds: 10
+
+# worker：队列扫描与租约
+worker:
+  enabled: true
+  concurrency: 2
+  poll_interval_seconds: 0.5
+  lease_seconds: 120
+  max_attempts: 3
+  backoff_base_seconds: 2.0
+  reap_interval_seconds: 5.0
+
+# API
+api:
+  host: 127.0.0.1
+  port: 8310
+  # 开发联调代理（前端 playground 经此免签名访问，服务端注入固定联调身份）
+  # 仅 dev/test 且显式开启才生效；生产开启会拒绝启动
+  playground:
+    enabled: true
+    operator_user_id: dev-playground
+    operator_user_name: 开发联调
+
+log_level: INFO
