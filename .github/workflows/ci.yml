@@ -14,46 +14,13 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # CI 不跑测试：真实 PostgreSQL 测试需本地 initdb，按需本地执行
-  # （`.venv\Scripts\python -m pytest tests/ -v`，见 README）。
-  # 流水线只做：编译（前端构建）→ 打包 Docker 镜像 → 推送 GHCR。
-  frontend:
-    name: 前端编译
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - run: npm ci
-
-      - run: npx svelte-kit sync
-
-      - run: npx vite build 2>&1 || (echo "=== BUILD FAILED ===" && npx vite build --debug 2>&1 | tail -50 && exit 1)
-
-      # adapter-auto 产物落在 .svelte-kit/output（本仓库无 svelte.config.js，不存在 build/）
-      - uses: actions/upload-artifact@v4
-        with:
-          name: frontend-build
-          path: frontend/.svelte-kit/output
-          retention-days: 7
-
   docker:
-    name: 打包镜像并推送 GHCR
-    needs: frontend
+    name: 多阶段构建并推送 GHCR
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # 镜像名必须小写：ghcr.io/<owner>/<repo>
       - name: 计算镜像名
         id: image
         run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"

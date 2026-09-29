@@ -17,3 +17,25 @@
 - 启动脚本遵循需求第 8 节：隐藏后台进程、预检依赖/端口、仅停止自己的进程；不自动迁移真实库或安装全局依赖。
 - 每个工作包先写失败测试，再实现并交接测试命令/结果/阻塞/下一步。Stub、真实模型和正式 CRM 验收明确区分，缺凭据不能假称通过。
 - 不擅自执行发布、远端分支删除、购买服务、外发真实业务数据或改生产环境；数据库迁移须显式授权，不在启动自动改库。
+
+## MCP 服务
+
+### GitHub MCP
+- 配置位置：`~/AppData/Roaming/Xiaomi MiMo/engine-config/mimocode.json`
+- 用途：查看 Actions 运行状态、管理 PR/Issue、读取仓库信息
+- 认证：使用 Personal Access Token（已配置在 mimocode.json）
+- 常用操作：`gh run list`、`gh run view`、`gh pr list`
+
+### DB MCP（数据库）
+- 连接 ID：**37**（本项目数据库，已配置读写权限）
+- 用途：执行 SQL 查询、DDL 变更、数据迁移
+- 可用工具：`dbmcp_execute_query`（只读）、`dbmcp_execute_sql`（DDL/DML）
+- 注意：DDL 操作须显式授权，不在启动自动改库
+
+## CI/CD
+
+- 工作流：`.github/workflows/ci.yml`
+- 触发：push 到 main 或 v* 标签
+- 流程：多阶段 Docker 构建（前端 Node.js → Python 运行时）→ 推送 GHCR
+- 镜像：`ghcr.io/redgreat/sales-crm-ai`
+- 本地测试：`docker build -t sales-crm-ai .`
