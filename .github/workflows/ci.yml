@@ -34,7 +34,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run build
+      - run: npx vite build
 
       # adapter-auto 产物落在 .svelte-kit/output（本仓库无 svelte.config.js，不存在 build/）
       - uses: actions/upload-artifact@v4
