@@ -1,28 +1,35 @@
-# 版本管理
-.git
-.github
-.gitignore
-
-# 本地运行数据与密钥
+# 依赖
+node_modules
 .venv
+
+# 构建产物
+.svelte-kit
+build
+dist
+
+# 本地数据
 .local
 logs
+*.pid
+*.runtime.json
+
+# 配置（含密钥）
 conf/config.yml
-.env*
+.env
+.env.local
 
-# Python 产物
-__pycache__
-**/__pycache__
-*.py[cod]
+# IDE
+.vscode
+.idea
+
+# 测试
 .pytest_cache
-*.egg-info
+.coverage
+htmlcov
 
-# 前端
-frontend/node_modules
-frontend/.svelte-kit
-frontend/build
+# Git
+.git
+.github
 
-# 文档与测试（镜像不需要；测试本地执行，CI 只编译打包镜像）
-tests
-docs
-*.md
+# 文档
+docs/_build
