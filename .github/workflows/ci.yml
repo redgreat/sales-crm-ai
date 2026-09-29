@@ -36,7 +36,7 @@ jobs:
 
       - run: npx svelte-kit sync
 
-      - run: npx vite build
+      - run: npx vite build 2>&1 || (echo "=== BUILD FAILED ===" && npx vite build --debug 2>&1 | tail -50 && exit 1)
 
       # adapter-auto 产物落在 .svelte-kit/output（本仓库无 svelte.config.js，不存在 build/）
       - uses: actions/upload-artifact@v4
