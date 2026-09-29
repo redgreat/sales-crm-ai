@@ -35,6 +35,11 @@ class AnalysisGraphState(TypedDict, total=False):
 
     capability: str
     input_payload: dict[str, Any] | None
+    # 问答类（4.6～4.9）：问题、按授权检索到的知识事实、会话历史（executor 执行前注入）
+    question: str
+    knowledge_facts: list[dict[str, Any]]
+    history: list[dict[str, Any]]
+    history_text: str
     facts_text: str
     fact_refs: list[dict[str, str]]
     analysis: dict[str, Any] | None
@@ -46,7 +51,9 @@ def _fact_text(fact: dict[str, Any]) -> str:
     for key in ("text", "summary", "content"):
         value = fact.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip().replace("\n", " ")[:_FACT_LINE_LIMIT]
+            # 知识快照需要更多上下文；普通 CRM 事实保持短行
+            limit = 1200 if str(fact.get("type") or "") == "knowledge" else _FACT_LINE_LIMIT
+            return value.strip().replace("\n", " ")[:limit]
     return ""
 
 

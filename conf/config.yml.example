@@ -35,6 +35,54 @@ crm:
   secret: ""
   timeout_seconds: 10
 
+# ---------- 增强输入（P5 需求 4.12 录音 / 4.13 图片）----------
+# 默认全部 false：凭据齐备后再把 enabled 改为 true。
+# 启用但凭据缺失会直接拒绝启动，绝不回退为"假装识别成功"。
+#
+# 密钥两种给法（环境变量优先于本文件，推荐部署时用环境变量，密钥不落盘）：
+#   SAI_ASR_API_KEY / SAI_ASR_WORKSPACE_ID
+#   SAI_OCR_ACCESS_KEY_ID / SAI_OCR_ACCESS_KEY_SECRET
+#   SAI_OSS_ACCESS_KEY_ID / SAI_OSS_ACCESS_KEY_SECRET / SAI_OSS_ENDPOINT / SAI_OSS_BUCKET
+
+# ASR 录音文件识别（阿里云百炼 DashScope）
+# 开通：百炼控制台开通服务 → 创建 API Key
+# 硬约束：百炼只接受公网可访问的 URL，不支持本地文件/Base64
+#         → 本地音频需先入 OSS（见下方 oss）取 URL，或由调用方直接给公网 url
+asr:
+  enabled: false
+  provider: dashscope
+  api_key: ""                 # ← 百炼 API Key 填这里
+  workspace_id: ""            # 业务空间 ID（专属域名用）；留空走 dashscope.aliyuncs.com
+  region: cn-beijing
+  model: paraformer-v2
+  language_hints: ["zh"]
+  diarization_enabled: true   # 说话人分离（仅单声道、建议≤2h）；只出 speaker_id，不映射员工
+  timeout_seconds: 30
+  poll_interval_seconds: 3
+  poll_timeout_seconds: 900
+
+# 对象存储：为 ASR 提供公网 URL（ASR 的硬依赖）
+# 未启用时，ASR 只能识别调用方自行提供的公网 URL
+oss:
+  enabled: false
+  endpoint: ""                # 如 https://oss-cn-hangzhou.aliyuncs.com
+  bucket: ""
+  access_key_id: ""           # ← 可与下方 OCR 共用同一个 AccessKey
+  access_key_secret: ""       # ←
+  signed_url_ttl_seconds: 3600
+
+# OCR 图片文字识别（阿里云文字识别 OCR）
+# 开通：实名认证 → https://ocr.console.aliyun.com/ 按需开通（开通免费、赠免费额度）
+# 凭据是 AccessKey（不是 API Key）；图片支持 Url 或二进制，故不强依赖 OSS
+ocr:
+  enabled: false
+  access_key_id: ""           # ← 填这里
+  access_key_secret: ""       # ← 填这里
+  endpoint: ocr-api.cn-hangzhou.aliyuncs.com
+  type: Advanced              # 通用文字识别高精版
+  output_coordinate: points   # 原图锚点：points | rectangle | ""（不返回坐标）
+  timeout_seconds: 30
+
 # worker：队列扫描与租约
 worker:
   enabled: true

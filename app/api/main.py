@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api import deps
-from app.api.routes import conversations, health, playground, runs
+from app.api.routes import conversations, health, knowledge, playground, runs
 from app.config import Settings, get_settings
 from app.errors import ApiError
 from app.graphs.builder import compile_graph_for, graph_registry_version
@@ -124,6 +124,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(runs.router, dependencies=[_not_for_health()])
     app.include_router(conversations.router, dependencies=[_not_for_health()])
+    # 知识授权索引同步（需求 4.16）：CRM 发布/停用/撤权时调用
+    app.include_router(knowledge.router, dependencies=[_not_for_health()])
     app.include_router(playground.router)
     return app
 

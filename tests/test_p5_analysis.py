@@ -70,7 +70,10 @@ def test_capability_registry_contract():
         if spec.kind == "analysis":
             assert spec.read_only is True, name
             assert not spec.requires_text, name
-            assert spec.requires_facts, name
+            if not spec.requires_facts:
+                # 不装配 CRM facts 的分析能力，必须自己按授权检索知识
+                # （需求 4.8 knowledge.qa：知识由 AI 授权索引提供，过滤先于内容进模型）
+                assert spec.retrieves_knowledge, name
             assert spec.prompt_template, name
     # 仅日报底稿/今日任务/主管关注允许预生成（需求 4 结尾段）
     assert set(pregen_capabilities()) == {"daily.draft", "today.summary", "manager.focus"}

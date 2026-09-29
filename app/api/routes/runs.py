@@ -1,6 +1,8 @@
 """Run 路由：创建（幂等）、查询、取消、恢复。"""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -111,6 +113,19 @@ def _validate_capability_input(spec: CapabilitySpec, body: CreateRunBody) -> Non
                     f"input.facts[{index}] 必须是对象且带稳定 id",
                     details={"capability": spec.name, "index": index},
                 )
+    # 问答族附加契约（需求 4.6/4.7）：会话内发起、条数上限由注册表声明
+    if spec.requires_conversation and not body.conversation_id:
+        raise ValidationFailed(
+            "该能力必须在对象绑定会话内发起（需要 conversation_id）",
+            details={"capability": spec.name, "field": "conversation_id"},
+        )
+    if spec.max_facts is not None:
+        facts = payload.get("facts")
+        if isinstance(facts, list) and len(facts) > spec.max_facts:
+            raise ValidationFailed(
+                f"input.facts 超过 {spec.max_facts} 条上限（跨对象问答只调用白名单查询，限制条数与时间窗）",
+                details={"capability": spec.name, "limit": spec.max_facts, "count": len(facts)},
+            )
     if spec.pregen:
         if not _dotted(payload, "beneficiary.user_id"):
             raise ValidationFailed(
@@ -125,12 +140,31 @@ def _validate_capability_input(spec: CapabilitySpec, body: CreateRunBody) -> Non
             )
 
 
+def _derive_idempotency_key(spec: CapabilitySpec, payload: dict[str, Any]) -> str:
+    """未提供幂等键时，按 (能力, 入参) 内容派生稳定键。
+
+    只读问答类能力（需求 4.6～4.9）多由页面直接发问，不强制调用方管理幂等键；
+    但相同入参的重放必须命中同一 Run，故按规范化入参派生摘要。
+    """
+    canonical = json.dumps(
+        {"capability": spec.name, "input": payload},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return "auto:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+
+
 def _resolve_idempotency_key(spec: CapabilitySpec, body: CreateRunBody) -> tuple[str, str]:
     """返回 (幂等键, 来源)；预生成一律由 schedule_key 派生，避免两端重复调度。"""
     if spec.pregen:
         schedule_key = str(_dotted(body.input or {}, "schedule_key") or "").strip()
         return pregen_idempotency_key(capability=spec.name, schedule_key=schedule_key), "pregen_schedule_key"
     key = (body.idempotency_key or "").strip()
+    if not key:
+        # 未显式提供：按内容派生（重放仍返回原 Run）
+        return _derive_idempotency_key(spec, body.input or {}), "derived_input"
     if len(key) < 8:
         raise ValidationFailed(
             "idempotency_key 至少 8 位（重放必须返回原 Run）",
@@ -156,6 +190,30 @@ async def create_run(body: CreateRunBody, request: Request, operator: OperatorCo
             raise NotFound("会话不存在")
         if conversation["crm_user_id"] != operator.user_id:
             raise Forbidden("无权访问该会话")
+        # 对象绑定会话：input.scope 必须与会话绑定对象一致（需求 4.6 对象内追问）
+        if spec.requires_subject_binding:
+            scope = (body.input or {}).get("scope") or {}
+            bound_type = conversation.get("subject_type")
+            bound_id = conversation.get("subject_id")
+            if not bound_type or not bound_id:
+                raise ValidationFailed(
+                    "该能力要求会话已绑定业务对象",
+                    details={"capability": spec.name, "field": "conversation_id"},
+                )
+            if scope.get("subject_type") != bound_type or str(
+                scope.get("subject_id") or ""
+            ) != str(bound_id):
+                raise ValidationFailed(
+                    "会话绑定的对象与 input.scope 不一致",
+                    details={
+                        "capability": spec.name,
+                        "conversation": {"subject_type": bound_type, "subject_id": bound_id},
+                        "input": {
+                            "subject_type": scope.get("subject_type"),
+                            "subject_id": scope.get("subject_id"),
+                        },
+                    },
+                )
         thread_id = conversation["thread_id"]
     else:
         thread_id = None  # create_run 内默认 run:{run_id}

@@ -16,6 +16,37 @@ from typing import Literal
 
 CapabilityKind = Literal["extract", "analysis"]
 
+# 图版本常量（需求 5.1：图版本与能力绑定；注册表是唯一真源）
+ANALYSIS_GRAPH_VERSION = "analysis@1"
+# 问答族（需求 4.6～4.9）走独立问答图：历史只作上下文、知识先过滤后入模
+QA_GRAPH_VERSION = "analysis-qa@1"
+
+# 问答类能力（需求 4.6～4.9）的统一输出契约：同一 JSON 结构，多一路会话历史与知识行。
+QA_PROMPT_TEMPLATE = """你是 CRM 销售助理，只做只读问答与准备，不创建、不修改任何正式业务对象，也不发通知。
+能力：{capability}（{description}）
+问题：{question}
+
+要求：
+- 只依据 <<USER_TEXT>> 中给出的行：`[F]` 行是事实与知识（已按你的权限过滤），`[H]` 行是会话历史；
+- 事实与推断分开：结论必须落到具体行；推断要在结果里明确标注为推断；
+- 事实或知识不足时把缺口写进 missing，不猜测、不生成 SQL、不重算指标（指标由 CRM 白名单查询计算）；
+- citations 只能引用 `[F]` 行里出现的 id 与 version，不得引用历史行，也不得编造；
+- 只输出 JSON，不要输出任何其他文字。
+
+JSON 结构：
+{{
+  "summary": "对问题的回答（只读）",
+  "sections": [{{"title": "小节标题", "points": ["要点"]}}],
+  "missing": ["缺失的事实或知识说明"],
+  "suggestions": ["下一步建议（只读，不派任务不发通知）"],
+  "citations": [{{"ref_id": "[F] 行中的 id", "type": "事实或知识类型", "version": "版本"}}]
+}}
+
+<<OUTPUT_CONTRACT>>analysis<<END_OUTPUT_CONTRACT>>
+<<CAPABILITY>>{capability}<<END_CAPABILITY>>
+<<USER_TEXT>>
+{user_text}
+<<END_USER_TEXT>>"""
 # 只读分析类能力的统一输出契约（模型必须按此 JSON 结构输出）
 ANALYSIS_PROMPT_TEMPLATE = """你是 CRM 销售助理，只做只读归纳，不创建、不修改任何正式业务对象。
 能力：{capability}（{description}）
@@ -62,6 +93,16 @@ class CapabilitySpec:
     # 必填的 input 点路径（如 "window.from"）
     required_input_fields: tuple[str, ...] = ()
     prompt_template: str = ""
+    # 必须在会话中发起（对象内追问要求 conversation_id）
+    requires_conversation: bool = False
+    # 会话必须绑定到 input.scope 指定的对象（对象绑定会话）
+    requires_subject_binding: bool = False
+    # 执行时由 AI 按操作者授权检索知识索引（过滤先于内容进模型）
+    retrieves_knowledge: bool = False
+    # 执行时加载会话历史（对象内追问用有效历史）
+    requires_history: bool = False
+    # facts 条数上限（跨对象问答限制条数；时间窗由 input.window 约束）
+    max_facts: int | None = None
 
 
 CAPABILITIES: dict[str, CapabilitySpec] = {
@@ -128,6 +169,64 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         requires_facts=True,
         required_input_fields=("facts", "window.from", "window.to"),
         prompt_template=ANALYSIS_PROMPT_TEMPLATE,
+    ),
+    "object.qa": CapabilitySpec(
+        name="object.qa",
+        kind="analysis",
+        graph_version=QA_GRAPH_VERSION,
+        prompt_version="object-qa-prompt@1",
+        description="对象内追问：对象绑定会话中用有效历史与当前事实回答，事实与推断分开",
+        read_only=True,
+        pregen=False,
+        requires_text=False,
+        requires_facts=True,
+        required_input_fields=("question", "facts", "scope.subject_type", "scope.subject_id"),
+        prompt_template=QA_PROMPT_TEMPLATE,
+        requires_conversation=True,
+        requires_subject_binding=True,
+        requires_history=True,
+    ),
+    "business.qa": CapabilitySpec(
+        name="business.qa",
+        kind="analysis",
+        graph_version=QA_GRAPH_VERSION,
+        prompt_version="business-qa-prompt@1",
+        description="轻量跨对象问答：只用 CRM 白名单查询结果（限制条数与时间窗），指标由 CRM 计算",
+        read_only=True,
+        pregen=False,
+        requires_text=False,
+        requires_facts=True,
+        required_input_fields=("question", "facts", "window.from", "window.to"),
+        prompt_template=QA_PROMPT_TEMPLATE,
+        max_facts=50,
+    ),
+    "knowledge.qa": CapabilitySpec(
+        name="knowledge.qa",
+        kind="analysis",
+        graph_version=QA_GRAPH_VERSION,
+        prompt_version="knowledge-qa-prompt@1",
+        description="知识问答：检索已发布且本人有权的知识版本，返回引用与版本；过滤先于内容进模型",
+        read_only=True,
+        pregen=False,
+        requires_text=False,
+        requires_facts=False,  # 知识由 AI 索引按授权检索，facts 可选（CRM 可附上下文事实）
+        required_input_fields=("question",),
+        prompt_template=QA_PROMPT_TEMPLATE,
+        retrieves_knowledge=True,
+    ),
+    "meeting.prepare": CapabilitySpec(
+        name="meeting.prepare",
+        kind="analysis",
+        graph_version=QA_GRAPH_VERSION,
+        prompt_version="meeting-prepare-prompt@1",
+        description="会前准备：组合正式沟通/待办与有权知识生成准备要点；不自动建会议、不对外发送",
+        read_only=True,
+        pregen=False,
+        requires_text=False,
+        requires_facts=True,
+        required_input_fields=("facts", "meeting.topic"),
+        prompt_template=QA_PROMPT_TEMPLATE,
+        retrieves_knowledge=True,
     ),
 }
 

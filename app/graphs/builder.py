@@ -14,8 +14,9 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from app.capabilities import capability_versions, get_capability
+from app.capabilities import QA_GRAPH_VERSION, capability_versions, get_capability
 from app.graphs.analysis import build_analysis_graph, compile_analysis_graph
+from app.graphs.qa import build_qa_graph, compile_qa_graph
 from app.graphs.nodes import (
     ask_missing_node,
     build_candidates_node,
@@ -59,7 +60,7 @@ def graph_registry_version() -> dict[str, str]:
 
 
 def build_graph_for(capability: str, model: BaseChatModel) -> StateGraph:
-    """按能力注册表建图：抽取型走 communication.extract 图，只读分析型走分析图。"""
+    """按能力注册表建图：抽取型走 extract 图，问答族走 QA 图，其余走只读分析图。"""
     spec = get_capability(capability)
     if spec is None:
         raise ValueError(f"未知能力: {capability}")
@@ -67,6 +68,8 @@ def build_graph_for(capability: str, model: BaseChatModel) -> StateGraph:
         return build_graph(model)
     if not spec.prompt_template:
         raise ValueError(f"能力 {capability} 未登记 Prompt 模板")
+    if spec.graph_version == QA_GRAPH_VERSION:
+        return build_qa_graph(spec, model)
     return build_analysis_graph(spec, model)
 
 
@@ -78,6 +81,8 @@ def compile_graph_for(
         raise ValueError(f"未知能力: {capability}")
     if spec.kind == "extract":
         return compile_graph(model, checkpointer=checkpointer)
+    if spec.graph_version == QA_GRAPH_VERSION:
+        return compile_qa_graph(spec, model, checkpointer=checkpointer)
     return compile_analysis_graph(spec, model, checkpointer=checkpointer)
 
 
