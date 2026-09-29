@@ -103,7 +103,142 @@ CRM 导入结果使用稳定 `(ai_run_id, batch_id, item_id)` 唯一键及结果
 
 前台以 CRM 为唯一业务入口：新增 AI 接口联调页面；技术配置可在同入口受限页签维护模型、知识组件、能力绑定和健康状态；业务配置继续能力/来源/试点/预生成四页签。联调页面与销售页面分权，技术权限不等于全员正文可见权限。
 
-## 7. AI 专用接口联调页面
+## 7. CRM 集成对接方案
+
+### 7.1 系统分工
+
+```mermaid
+mindmap
+  root((CRM AI 系统))
+    CRM Java 后端
+      身份认证与权限
+      正式业务数据
+      候选确认与写入
+      审计与幂等
+    AI Python 服务
+      模型调用与编排
+      会话与记忆
+      Run 队列与执行
+      候选生成与追问
+    前端
+      CRM Vue2 业务入口
+      Svelte AI 联调页面
+      统一身份与权限
+```
+
+| 组件 | 职责 | 禁止 |
+|------|------|------|
+| **CRM Java** | 身份认证、权限过滤、正式业务写入、候选确认、审计 | 直连模型供应商、持有模型 Key |
+| **AI Python** | 模型调用、Prompt 编排、会话管理、候选生成、Run 队列 | 直写 CRM 正式表、绕过权限 |
+| **前端** | 用户交互、候选展示与确认、Run 状态展示 | 持有服务密钥、直接调用 AI |
+
+### 7.2 集成架构
+
+```mermaid
+flowchart LR
+    subgraph 前端
+        H5[H5/PC 前端]
+    end
+    subgraph CRM Java
+        AUTH[JWT 认证]
+        BIZ[业务 Service]
+        CAND[候选与确认]
+        FACT[事实查询 API]
+    end
+    subgraph AI Python
+        API[FastAPI]
+        GRAPH[LangGraph]
+        RUN[Run 队列]
+        CHECK[(Checkpoint)]
+    end
+    subgraph 模型
+        LLM[直连 Provider]
+    end
+
+    H5 -->|用户 JWT| AUTH
+    AUTH --> BIZ
+    AUTH -->|代理请求| API
+    API --> GRAPH
+    GRAPH --> LLM
+    GRAPH --> CHECK
+    API -->|拉取结果| CAND
+    CAND -->|确认写入| BIZ
+    FACT -->|HMAC 签名| API
+```
+
+### 7.3 鉴权机制
+
+```mermaid
+flowchart TD
+    A[用户登录 CRM] --> B[CRM 签发 JWT]
+    B --> C[前端携带 JWT 调用 CRM]
+    C --> D[CRM 验证 JWT 并解析身份]
+    D --> E[CRM 代理调用 AI 服务]
+    E --> F[AI 验证 HMAC 签名]
+    F --> G[AI 使用 CRM 传入的身份]
+    G --> H[AI 回查 CRM 事实 API]
+    H --> I[CRM 验证 HMAC 并过滤权限]
+    I --> J[返回脱敏事实给 AI]
+```
+
+**鉴权层次：**
+
+| 层次 | 机制 | 说明 |
+|------|------|------|
+| 用户 → CRM | JWT Bearer | CRM 签发，含用户身份与权限 |
+| CRM → AI | HMAC-SHA256 签名 | 含 key_id、timestamp、nonce、user_id |
+| AI → CRM | HMAC-SHA256 签名 | 回查事实 API，最小权限 |
+| 防重放 | nonce + 时间窗 | 内存 nonce 缓存，300s 时间窗 |
+
+### 7.4 核心流程
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant C as CRM
+    participant A as AI 服务
+    participant M as 模型
+
+    U->>C: 提交沟通内容
+    C->>A: 创建 Run（HMAC 签名）
+    A->>M: 调用模型抽取
+    M-->>A: 返回候选建议
+    A-->>C: Run 完成，返回结果
+    C->>C: 幂等导入候选
+    C-->>U: 展示候选待确认
+    U->>C: 确认/修改候选
+    C->>C: 校验权限与必填
+    C->>C: 写入正式活动/任务
+    C-->>U: 返回正式对象
+```
+
+### 7.5 数据边界
+
+```mermaid
+flowchart TB
+    subgraph CRM 库
+        T1[(客户/线索/商机)]
+        T2[(任务/活动/日报)]
+        T3[(候选与确认记录)]
+        T4[(审计日志)]
+    end
+    subgraph AI 库
+        D1[(Run/会话/消息)]
+        D2[(Checkpoint)]
+        D3[(知识索引映射)]
+    end
+    T1 -.->|只读，经 API| D3
+    D1 -.->|只读，经 API| T1
+    T3 -->|正式写入| T2
+```
+
+**核心原则：**
+- AI 库不存正式业务事实，只存运行数据与授权索引
+- CRM 库是正式事实唯一来源
+- 跨库只通过 API，不直连数据库
+- 候选 ≠ 事实，必须人工确认
+
+## 8. AI 专用接口联调页面
 
 实现位置为 CRM 前端独立路由/目录，拟 `/ai/playground`，复用现有登录、请求封装及权限，不迁入 AgentZR Vue3 页面。开发测试环境启用，生产默认隐藏并后端限制，不能仅隐藏菜单。
 
