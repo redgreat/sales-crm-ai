@@ -404,3 +404,72 @@ async def test_meeting_prepare_mixes_facts_and_knowledge(qa_api):
     assert result["knowledge_used"]["count"] == 1
     assert "kb-pricing" in {c["ref_id"] for c in result["citations"]}
     assert "ACT-9" in {c["ref_id"] for c in result["citations"]}
+
+@pytest.mark.realpg
+async def test_knowledge_search_ranks_by_question(qa_api, db_pool):
+    """知识检索按问题相关度排序：问"报销"时不应拿"招聘"当依据。
+
+    相关性只用于排序，不参与授权判定——无关但有权、且提问无命中时仍返回原序。
+    """
+    from app.knowledge import search_authorized
+
+    client, settings = qa_api
+    await _sync_doc(client, settings, {
+        "knowledge_id": "kb-travel", "version": "v1", "title": "差旅报销标准",
+        "content": "出差住宿每晚上限 500 元，需提交发票。", "scope": {"users": ["u1"]},
+    })
+    await _sync_doc(client, settings, {
+        "knowledge_id": "kb-hiring", "version": "v1", "title": "招聘流程",
+        "content": "简历筛选后进行两轮面试。", "scope": {"users": ["u1"]},
+    })
+    await _sync_doc(client, settings, {
+        "knowledge_id": "kb-leave", "version": "v1", "title": "请假制度",
+        "content": "年假需提前三个工作日申请。", "scope": {"users": ["u1"]},
+    })
+
+    async with db_pool.connection() as conn:
+        ranked = await search_authorized(conn, user_id="u1", query="报销标准是多少？", limit=3)
+        assert [d["knowledge_id"] for d in ranked][0] == "kb-travel"
+
+        # 全部零命中时保持原序，不假装检索到相关文档
+        none_hit = await search_authorized(conn, user_id="u1", query="zzzz 无关查询", limit=3)
+        assert len(none_hit) == 3
+
+        # 相关性不得绕过授权：u2 无权时仍检索不到
+        others = await search_authorized(conn, user_id="u2", query="报销标准是多少？", limit=3)
+        assert others == []
+
+
+@pytest.mark.realpg
+async def test_knowledge_search_ranks_by_question(qa_api, db_pool):
+    """知识检索按问题相关度排序：问"报销"时不应拿"招聘"当依据。
+
+    相关性只用于排序，不参与授权判定——无关但有权、且提问无命中时仍返回原序。
+    """
+    from app.knowledge import search_authorized
+
+    client, settings = qa_api
+    await _sync_doc(client, settings, {
+        "knowledge_id": "kb-travel", "version": "v1", "title": "差旅报销标准",
+        "content": "出差住宿每晚上限 500 元，需提交发票。", "scope": {"users": ["u1"]},
+    })
+    await _sync_doc(client, settings, {
+        "knowledge_id": "kb-hiring", "version": "v1", "title": "招聘流程",
+        "content": "简历筛选后进行两轮面试。", "scope": {"users": ["u1"]},
+    })
+    await _sync_doc(client, settings, {
+        "knowledge_id": "kb-leave", "version": "v1", "title": "请假制度",
+        "content": "年假需提前三个工作日申请。", "scope": {"users": ["u1"]},
+    })
+
+    async with db_pool.connection() as conn:
+        ranked = await search_authorized(conn, user_id="u1", query="报销标准是多少？", limit=3)
+        assert [d["knowledge_id"] for d in ranked][0] == "kb-travel"
+
+        # 全部零命中时保持原序，不假装检索到相关文档
+        none_hit = await search_authorized(conn, user_id="u1", query="zzzz 无关查询", limit=3)
+        assert len(none_hit) == 3
+
+        # 相关性不得绕过授权：u2 无权时仍检索不到
+        others = await search_authorized(conn, user_id="u2", query="报销标准是多少？", limit=3)
+        assert others == []

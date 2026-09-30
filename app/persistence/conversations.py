@@ -121,16 +121,30 @@ async def append_message(
                 return dict(created)
 
 
+async def _fetch_messages(conn: psycopg.AsyncConnection, conversation_id: str, limit: int) -> list[dict[str, Any]]:
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            """
+            SELECT * FROM ai_messages WHERE conversation_id = %s
+            ORDER BY seq LIMIT %s
+            """,
+            (UUID(conversation_id), limit),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+
 async def list_messages(
-    pool: psycopg.AsyncConnectionPool, conversation_id: str, *, limit: int = 100
+    source: psycopg.AsyncConnectionPool | psycopg.AsyncConnection,
+    conversation_id: str,
+    *,
+    limit: int = 100,
 ) -> list[dict[str, Any]]:
-    async with pool.connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                """
-                SELECT * FROM ai_messages WHERE conversation_id = %s
-                ORDER BY seq LIMIT %s
-                """,
-                (UUID(conversation_id), limit),
-            )
-            return [dict(row) for row in await cur.fetchall()]
+    """列出会话消息。
+
+    同时接受**连接池**或**单条连接**：executor 装配上下文时已持有一条连接，
+    复用它可以少一次借还往返，不必为此再开一条。
+    """
+    if isinstance(source, psycopg.AsyncConnectionPool):
+        async with source.connection() as conn:
+            return await _fetch_messages(conn, conversation_id, limit)
+    return await _fetch_messages(source, conversation_id, limit)

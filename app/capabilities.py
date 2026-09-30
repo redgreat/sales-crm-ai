@@ -103,6 +103,11 @@ class CapabilitySpec:
     requires_history: bool = False
     # facts 条数上限（跨对象问答限制条数；时间窗由 input.window 约束）
     max_facts: int | None = None
+    # 入口可见条件（移动端 PRD 对齐 M-12）：前端据此决定入口是否展示，
+    # 不由前端自行推断能力可用性（避免"页面有按钮但调用必失败"）。
+    entry_conditions: tuple[str, ...] = ()
+    # 源对象返回路径：结果回跳到哪个页面/对象（M-12 要求入口声明返回路径）
+    return_path: str = ""
 
 
 CAPABILITIES: dict[str, CapabilitySpec] = {
@@ -117,6 +122,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         requires_text=True,
         requires_facts=False,
         required_input_fields=("text",),
+        entry_conditions=('需用户主动提交沟通文本/录音转写结果', '不得由系统自动采集触发（M-04）'),
+        return_path='communication:detail',
     ),
     "daily.draft": CapabilitySpec(
         name="daily.draft",
@@ -130,6 +137,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         requires_facts=True,
         required_input_fields=("facts", "window.from", "window.to"),
         prompt_template=ANALYSIS_PROMPT_TEMPLATE,
+        entry_conditions=('仅当日窗口', '受益人本人可见（预生成由 CRM 调度）'),
+        return_path='daily:detail',
     ),
     "object.summary": CapabilitySpec(
         name="object.summary",
@@ -143,6 +152,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         requires_facts=True,
         required_input_fields=("facts", "scope.subject_type", "scope.subject_id"),
         prompt_template=ANALYSIS_PROMPT_TEMPLATE,
+        entry_conditions=('需在客户/线索/商机详情页', '操作者对该对象有查看权'),
+        return_path='object:detail:{scope.subject_type}:{scope.subject_id}',
     ),
     "today.summary": CapabilitySpec(
         name="today.summary",
@@ -156,6 +167,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         requires_facts=True,
         required_input_fields=("facts", "window.from", "window.to"),
         prompt_template=ANALYSIS_PROMPT_TEMPLATE,
+        entry_conditions=('本人视角', '数据来自 CRM 确定性底单（不恢复模型排序）'),
+        return_path='today:list',
     ),
     "manager.focus": CapabilitySpec(
         name="manager.focus",
@@ -169,6 +182,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         requires_facts=True,
         required_input_fields=("facts", "window.from", "window.to"),
         prompt_template=ANALYSIS_PROMPT_TEMPLATE,
+        entry_conditions=('操作者具团队查看权限', '只读团队底单，不评分不派任务'),
+        return_path='manager:dashboard',
     ),
     "object.qa": CapabilitySpec(
         name="object.qa",
@@ -185,6 +200,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         requires_conversation=True,
         requires_subject_binding=True,
         requires_history=True,
+        entry_conditions=('对象详情页内', '已建立对象绑定会话 conversation_id'),
+        return_path='object:detail:{scope.subject_type}:{scope.subject_id}',
     ),
     "business.qa": CapabilitySpec(
         name="business.qa",
@@ -199,6 +216,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         required_input_fields=("question", "facts", "window.from", "window.to"),
         prompt_template=QA_PROMPT_TEMPLATE,
         max_facts=50,
+        entry_conditions=('跨对象问答入口', '事实条数与时间窗受契约限制'),
+        return_path='business:qa',
     ),
     "knowledge.qa": CapabilitySpec(
         name="knowledge.qa",
@@ -213,6 +232,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         required_input_fields=("question",),
         prompt_template=QA_PROMPT_TEMPLATE,
         retrieves_knowledge=True,
+        entry_conditions=('存在已发布且本人有权的知识', '撤权后立即从可用集合消失'),
+        return_path='knowledge:qa',
     ),
     "meeting.prepare": CapabilitySpec(
         name="meeting.prepare",
@@ -227,6 +248,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         required_input_fields=("facts", "meeting.topic"),
         prompt_template=QA_PROMPT_TEMPLATE,
         retrieves_knowledge=True,
+        entry_conditions=('会议上下文中（topic 必填）', '只读准备，不自动建会议/不对外发送'),
+        return_path='meeting:prepare',
     ),
 }
 

@@ -24,6 +24,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.capabilities import CapabilitySpec, get_capability
+from app.graphs.fact_guard import find_unconfirmed_fact
 from app.providers.stub import strip_usage_metadata
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -94,6 +95,10 @@ def _validate_facts(payload: dict[str, Any]) -> tuple[list[dict[str, Any]] | Non
         if not _fact_text(fact):
             return None, f"facts[{index}] 缺少可读文本（text/summary/content 至少一个）"
         normalized.append(fact)
+    # M-01：未确认候选不计入正式事实（日报底稿等只读归纳尤其不能混入选型）
+    problem = find_unconfirmed_fact(normalized)
+    if problem:
+        return None, f"{problem}（候选只能待本人确认后由 CRM 写入正式事实）"
     return normalized, None
 
 
@@ -213,6 +218,17 @@ def assemble_node(state: AnalysisGraphState) -> dict[str, Any]:
     if not summary and not sections:
         return {"error": "模型输出缺少 summary 与 sections，无法形成只读结果"}
 
+    # M-09：日报/今日任务等窗口类结果必须带上"截至时间"，界面才能提示
+    # "本底稿截至 X 时的事实"，而不是让用户误以为是最新的。
+    window = (state.get("input_payload") or {}).get("window")
+    as_of: dict[str, Any] = {}
+    if isinstance(window, dict):
+        as_of = {
+            "from": str(window.get("from") or "").strip(),
+            "to": str(window.get("to") or "").strip(),
+        }
+    beneficiary = (state.get("input_payload") or {}).get("beneficiary")
+
     result = {
         "capability": capability,
         "kind": "analysis",
@@ -224,6 +240,10 @@ def assemble_node(state: AnalysisGraphState) -> dict[str, Any]:
         "citations": citations,
         "citation_violations": violations,
         "facts_used": {"count": len(refs), "refs": refs},
+        # 事实条数与截止时间：刷新底稿时可据此提示"新增了 N 条事实"
+        "facts_count": len(refs),
+        "as_of": as_of,
+        "beneficiary": beneficiary if isinstance(beneficiary, dict) else None,
         "notes": f"只读结果：不写入任何正式业务对象；{spec.description if spec else ''}".strip(),
     }
     return {"result": strip_usage_metadata(result)}

@@ -18,7 +18,11 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
 from app.capabilities import get_capability
-from app.knowledge import doc_as_fact, search_authorized
+from app.knowledge import (
+    doc_as_fact,
+    filter_unauthorized_history,
+    search_authorized,
+)
 from app.persistence import conversations as conversations_repo
 from app.persistence import runs as runs_repo
 from app.util import utcnow
@@ -85,26 +89,53 @@ class Executor:
         - 知识：按操作者授权检索（过滤在 SQL 层，先于内容进入模型），
           只把有权且已发布的最新版本注入图，不先取无权全文再隐藏引用；
         - 历史：对象内追问使用会话有效历史，仅作上下文（`[H]` 行），
-          不进引用白名单（历史不是事实来源）。
+          不进引用白名单（历史不是事实来源）；且**引用过已撤权知识的旧回答
+          会被剔除**（M-10）——否则撤权内容会借历史绕回模型。
         """
         context: dict[str, Any] = {}
-        if spec.retrieves_knowledge:
-            user_id = str((run.get("operator") or {}).get("user_id") or "").strip()
-            if not user_id:
+        user_id = str((run.get("operator") or {}).get("user_id") or "").strip()
+        needs_knowledge = bool(spec.retrieves_knowledge and user_id)
+        needs_history = bool(spec.requires_history and run.get("conversation_id"))
+        if not (needs_knowledge or needs_history):
+            return context
+
+        # 知识与历史共用一条连接：少一次连接池借还，也避免两次往返
+        async with self.pool.connection() as conn:
+            if spec.retrieves_knowledge and not user_id:
                 logger.warning("run %s 缺少 operator.user_id，跳过知识检索", run.get("run_id"))
-            else:
-                async with self.pool.connection() as conn:
-                    docs = await search_authorized(conn, user_id=user_id, limit=QA_KNOWLEDGE_LIMIT)
+            if needs_knowledge:
+                # 带上问题做字面相关度重排：否则注入的是"最近几条"而非"相关的几条"
+                question = str((run.get("input") or {}).get("question") or "").strip()
+                if not question:
+                    topic = (run.get("input") or {}).get("meeting")
+                    if isinstance(topic, dict):
+                        question = str(topic.get("topic") or "").strip()
+                docs = await search_authorized(
+                    conn, user_id=user_id, limit=QA_KNOWLEDGE_LIMIT, query=question or None
+                )
                 context["knowledge_facts"] = [doc_as_fact(doc) for doc in docs]
-        if spec.requires_history and run.get("conversation_id"):
-            messages = await conversations_repo.list_messages(
-                self.pool, str(run["conversation_id"])
-            )
-            context["history"] = [
-                {"role": m.get("role"), "content": m.get("content")}
-                for m in messages
-                if m.get("content")
-            ]
+
+            if needs_history:
+                messages = await conversations_repo.list_messages(
+                    conn, str(run["conversation_id"])
+                )
+                history = [
+                    {"role": m.get("role"), "content": m.get("content"), "meta": m.get("meta")}
+                    for m in messages
+                    if m.get("content")
+                ]
+                # 撤权拦截（M-10）：引用了已撤权/已无权知识的旧回答不得作为上下文入模。
+                if user_id:
+                    history, dropped = await filter_unauthorized_history(
+                        conn, user_id=user_id, history=history
+                    )
+                    if dropped:
+                        logger.info(
+                            "run %s 历史中剔除 %d 条引用已撤权知识的旧回答",
+                            run.get("run_id"),
+                            len(dropped),
+                        )
+                context["history"] = history
         return context
 
     async def _execute_claimed(self, run: dict[str, Any]) -> None:
@@ -207,13 +238,25 @@ class Executor:
         else:
             content = str((result or {}).get("summary") or "").strip() or "（无可用依据，未生成结论）"
 
+        # 记录本条回答引用过的知识 id：撤权后据此把该条从历史中剔除（M-10），
+        # 否则被撤权的内容会借"会话历史"再次进入模型。
+        knowledge_used = (result or {}).get("knowledge_used") or {}
+        cited = [
+            str(ref.get("ref_id")).strip()
+            for ref in (knowledge_used.get("refs") or [])
+            if isinstance(ref, dict) and str(ref.get("ref_id") or "").strip()
+        ]
+        meta: dict[str, Any] = {"candidates": result}
+        if cited:
+            meta["knowledge_refs"] = cited
+
         await conversations_repo.append_message(
             self.pool,
             conversation_id=str(conversation_id),
             role="assistant",
             content=content,
             run_id=str(run["run_id"]),
-            meta={"candidates": result},
+            meta=meta,
         )
 
     async def _handle_failure(self, run_id: str, generation: int, error: dict[str, Any]) -> None:

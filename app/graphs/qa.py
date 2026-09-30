@@ -28,10 +28,15 @@ from langgraph.graph.state import CompiledStateGraph
 
 from app.capabilities import CapabilitySpec, get_capability
 from app.graphs.analysis import serialize_facts
+from app.graphs.fact_guard import find_unconfirmed_fact
 from app.providers.stub import strip_usage_metadata
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 _HISTORY_LINE_LIMIT = 500
+# 历史预算：长会话若整段入模，会把事实/知识挤掉，也放大成本。
+# 只保留最近若干条，且总字符数封顶（保留 recent 优先于保留完整）。
+_HISTORY_MAX_ITEMS = 20
+_HISTORY_MAX_CHARS = 6000
 
 
 class QAGraphState(TypedDict, total=False):
@@ -75,7 +80,10 @@ def _has_text(fact: dict[str, Any]) -> bool:
 
 
 def _validate_fact_items(facts: list[Any], *, label: str) -> str | None:
-    """校验事实/知识行：必须是对象、带稳定 id 与可读文本（引用完整性需要）。"""
+    """校验事实/知识行：必须是对象、带稳定 id 与可读文本（引用完整性需要）。
+
+    另按 M-01 拦截未确认候选：候选不计入正式事实，不能参与只读问答与归纳。
+    """
     for index, fact in enumerate(facts):
         if not isinstance(fact, dict):
             return f"{label}[{index}] 必须是对象"
@@ -83,21 +91,44 @@ def _validate_fact_items(facts: list[Any], *, label: str) -> str | None:
             return f"{label}[{index}] 缺少稳定 id（引用完整性需要）"
         if not _has_text(fact):
             return f"{label}[{index}] 缺少可读文本（text/summary/content 至少一个）"
+    problem = find_unconfirmed_fact(facts, label=label)
+    if problem:
+        return f"{problem}（候选只能待本人确认后由 CRM 写入正式事实）"
     return None
 
 
 def serialize_history(history: list[dict[str, Any]]) -> str:
-    """会话历史 → `[H]` 行。历史只是上下文，不产生引用（不可作为 citations 来源）。"""
-    lines: list[str] = []
-    for index, item in enumerate(history, start=1):
+    """会话历史 → `[H]` 行。历史只是上下文，不产生引用（不可作为 citations 来源）。
+
+    预算控制：只取**最近**的若干条并封顶总字符数——历史是"最近的语境"，
+    越旧参考价值越低；若不封顶，长会话会把事实与知识挤出上下文窗口。
+    返回行仍从 1 重新编号，编号只用于上下文，不是引用 id。
+    """
+    prepared: list[tuple[str, str]] = []
+    for item in history:
         if not isinstance(item, dict):
             continue
         content = str(item.get("content") or "").strip().replace("\n", " ")
         if not content:
             continue
         role = str(item.get("role") or "user").strip()
-        lines.append(f"[H{index}] role={role} text={content[:_HISTORY_LINE_LIMIT]}")
-    return "\n".join(lines)
+        prepared.append((role, content[:_HISTORY_LINE_LIMIT]))
+
+    kept: list[tuple[str, str]] = []
+    used = 0
+    for role, content in reversed(prepared):
+        if len(kept) >= _HISTORY_MAX_ITEMS:
+            break
+        if used + len(content) > _HISTORY_MAX_CHARS and kept:
+            break
+        kept.append((role, content))
+        used += len(content)
+    kept.reverse()
+
+    return "\n".join(
+        f"[H{index}] role={role} text={content}"
+        for index, (role, content) in enumerate(kept, start=1)
+    )
 
 
 def _resolve_question(payload: dict[str, Any]) -> str:

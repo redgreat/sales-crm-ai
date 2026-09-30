@@ -14,7 +14,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api import deps
-from app.api.routes import conversations, health, knowledge, playground, runs
+from app.api.routes import (
+    capabilities,
+    conversations,
+    files,
+    health,
+    knowledge,
+    playground,
+    runs,
+)
 from app.config import Settings, get_settings
 from app.errors import ApiError
 from app.graphs.builder import compile_graph_for, graph_registry_version
@@ -126,6 +134,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(conversations.router, dependencies=[_not_for_health()])
     # 知识授权索引同步（需求 4.16）：CRM 发布/停用/撤权时调用
     app.include_router(knowledge.router, dependencies=[_not_for_health()])
+    # 能力目录（M-12）：前端入口契约的唯一真源
+    app.include_router(capabilities.router, dependencies=[_not_for_health()])
+    # 普通文件解析（需求 4.14）：纯文本解析，不落库、不调模型
+    app.include_router(files.router, dependencies=[_not_for_health()])
     app.include_router(playground.router)
     return app
 

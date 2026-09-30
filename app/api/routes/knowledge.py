@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import require_operator
 from app.auth import OperatorContext
 from app.errors import NotFound, ValidationFailed
-from app.knowledge import disable_knowledge, upsert_document
+from app.knowledge import disable_knowledge, upsert_document, validate_scope
 
 router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
 
@@ -28,20 +28,16 @@ class KnowledgeDocBody(BaseModel):
     status: str = Field(default="published", pattern="^(published|disabled)$")
     scope: dict[str, Any] = Field(default_factory=dict)
     published_at: str | None = None
+    # 由 CRM 声明"当前版本"：M-10 要求只检索已发布当前版本，AI 不自行推断版本新旧
+    is_current: bool = False
 
 
 def _validate_scope(scope: dict[str, Any]) -> None:
-    if not isinstance(scope, dict):
-        raise ValidationFailed("knowledge scope 必须是对象", details={"field": "scope"})
-    if scope.get("public") is True:
-        return
-    users = scope.get("users")
-    if isinstance(users, list) and users and all(isinstance(item, str) and item for item in users):
-        return
-    raise ValidationFailed(
-        "knowledge scope 必须显式声明 {\"public\": true} 或非空 users 列表（不默认公开）",
-        details={"field": "scope"},
-    )
+    """授权范围校验：失败即关闭（委托 store.validate_scope，避免两处规则漂移）。"""
+    try:
+        validate_scope(scope)
+    except ValueError as exc:
+        raise ValidationFailed(str(exc), details={"field": "scope"}) from exc
 
 
 @router.post("/documents", status_code=201)
@@ -63,11 +59,13 @@ async def sync_document(
             status=body.status,
             scope=body.scope,
             published_at=body.published_at,
+            is_current=body.is_current,
         )
     return {
         "knowledge_id": row["knowledge_id"],
         "version": row["version"],
         "status": row["status"],
+        "is_current": bool(row.get("is_current")),
         "synced": True,
     }
 

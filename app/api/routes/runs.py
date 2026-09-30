@@ -5,7 +5,7 @@ import hashlib
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import require_operator
@@ -237,6 +237,39 @@ async def create_run(body: CreateRunBody, request: Request, operator: OperatorCo
     payload["read_only"] = spec.read_only
     payload["pregen"] = spec.pregen
     return payload
+
+
+@router.get("")
+async def list_runs(
+    request: Request,
+    operator: OperatorContext = Depends(require_operator),
+    status: str | None = None,
+    capability: str | None = None,
+    conversation_id: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """按操作者列出 Run（只列自己的），支持按状态/能力/会话过滤。
+
+    支撑 M-07 的"当前 / 历史待处理 / 写入失败"分组：传 status=failed 即为失败分组，
+    不需要额外维护状态表。status 可逗号分隔传多个。
+    """
+    statuses = [item.strip() for item in (status or "").split(",") if item.strip()]
+    rows = await runs_repo.list_runs(
+        request.app.state.pool,
+        operator_user_id=operator.user_id,
+        statuses=statuses or None,
+        capability=capability or None,
+        conversation_id=conversation_id or None,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "runs": [_serialize(run) for run in rows],
+        "count": len(rows),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/{run_id}")

@@ -346,3 +346,44 @@ async def requeue_expired_leases(
                     (_history_entry("queued", reason="lease_expired"), limit),
                 )
                 return [str(row[0]) for row in await cur.fetchall()]
+
+
+async def list_runs(
+    pool: psycopg.AsyncConnectionPool,
+    *,
+    operator_user_id: str,
+    statuses: list[str] | None = None,
+    capability: str | None = None,
+    conversation_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """按操作者列出 Run（隔离：只看自己的）。
+
+    支撑 M-07 的"当前 / 历史待处理 / 写入失败"分组视图：调用方按 status 过滤即可，
+    不需要额外维护一份状态表。默认按创建时间倒序。
+    """
+    where = ["operator->>'user_id' = %s"]
+    params: list[Any] = [operator_user_id]
+    if statuses:
+        where.append("status = ANY(%s)")
+        params.append(list(statuses))
+    if capability:
+        where.append("capability = %s")
+        params.append(capability)
+    if conversation_id:
+        where.append("conversation_id = %s")
+        params.append(UUID(conversation_id))
+    params.extend([limit, offset])
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                f"""
+                SELECT * FROM ai_runs
+                WHERE {' AND '.join(where)}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params),
+            )
+            return [_row_to_dict(row) for row in await cur.fetchall()]
