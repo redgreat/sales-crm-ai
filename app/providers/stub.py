@@ -34,6 +34,46 @@ _ASSIGNEE_RE = re.compile(r"负责人\s*[:：]\s*(\S+)")
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
+def parse_draft_text(user_text: str) -> dict[str, Any]:
+    """从一句话里抽建档字段（stub 用正则；真实模型由 prompt 契约约束）。"""
+    import re as _re
+
+    def _after(*keys: str) -> str:
+        for key in keys:
+            m = _re.search(rf"{key}[：:]\s*([^\n，。]+)", user_text)
+            if m:
+                return m.group(1).strip()
+        return ""
+
+    draft: dict[str, str] = {}
+    for key, aliases in {
+        "name": ("客户名称", "客户", "公司", "商机名称", "名称"),
+        "customer_type": ("客户类型",),
+        "customer_name": ("所属客户", "所属客户名称", "客户"),
+        "contact_name": ("联系人", "联系人姓名"),
+        "mobile": ("电话", "手机", "联系方式"),
+        "raw_content": ("线索内容", "内容", "意向"),
+        "industry": ("行业",),
+        "remark": ("备注",),
+    }.items():
+        value = _after(*aliases)
+        if value:
+            draft[key] = value
+    # 客户名兜底：句中出现「XX公司/XX店/XX厂」且未显式给名
+    if "name" not in draft and "customer_name" not in draft:
+        m = _re.search(r"([一-龥A-Za-z0-9]{2,20}(?:有限公司|公司|门店|店|厂|集团|个体运输户))", user_text)
+        if m:
+            draft["name"] = m.group(1)
+    phone = _re.search(r"(1[3-9]\d{9})", user_text)
+    if phone and "mobile" not in draft:
+        draft["mobile"] = phone.group(1)
+    # 线索兜底：显式说「登记线索/记个线索」时，冒号后整句即线索内容
+    m = _re.search(r"(?:登记线索|记(?:一?条)?线索|线索)[：:]\s*([^\n]+)", user_text)
+    if m and "raw_content" not in draft:
+        draft["raw_content"] = m.group(1).strip()
+    return {"draft": draft, "notes": "stub 整理"}
+
+
 def parse_facts_text(user_text: str) -> dict[str, Any]:
     """确定性归纳：事实行原样汇总（只读，不做推断、不产生新业务事实）。
 
@@ -141,11 +181,12 @@ class StubChatModel(BaseChatModel):
             prompt = str(prompt)
         match = _USER_TEXT_RE.search(prompt)
         user_text = match.group(1) if match else prompt
-        payload = (
-            parse_facts_text(user_text)
-            if _ANALYSIS_CONTRACT_RE.search(prompt)
-            else parse_user_text(user_text)
-        )
+        if "<<OUTPUT_CONTRACT>>draft<<END_OUTPUT_CONTRACT>>" in prompt:
+            payload = parse_draft_text(user_text)
+        elif _ANALYSIS_CONTRACT_RE.search(prompt):
+            payload = parse_facts_text(user_text)
+        else:
+            payload = parse_user_text(user_text)
         message = AIMessage(content=json.dumps(payload, ensure_ascii=False))
         return ChatResult(generations=[ChatGeneration(message=message)])
 

@@ -20,6 +20,7 @@ CapabilityKind = Literal["extract", "analysis"]
 ANALYSIS_GRAPH_VERSION = "analysis@1"
 # 问答族（需求 4.6～4.9）走独立问答图：历史只作上下文、知识先过滤后入模
 QA_GRAPH_VERSION = "analysis-qa@1"
+DRAFT_GRAPH_VERSION = "draft@1"
 
 # 问答类能力（需求 4.6～4.9）的统一输出契约：同一 JSON 结构，多一路会话历史与知识行。
 QA_PROMPT_TEMPLATE = """你是 CRM 销售助理，只做只读问答与准备，不创建、不修改任何正式业务对象，也不发通知。
@@ -108,6 +109,8 @@ class CapabilitySpec:
     entry_conditions: tuple[str, ...] = ()
     # 源对象返回路径：结果回跳到哪个页面/对象（M-12 要求入口声明返回路径）
     return_path: str = ""
+    # 建档草稿类型（M20 新增类能力专用）：customer/contact/lead/opportunity
+    draft_type: str = ""
 
 
 CAPABILITIES: dict[str, CapabilitySpec] = {
@@ -250,6 +253,65 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         retrieves_knowledge=True,
         entry_conditions=('会议上下文中（topic 必填）', '只读准备，不自动建会议/不对外发送'),
         return_path='meeting:prepare',
+    ),
+    # ---------------- 助手建档草稿（移动端 M20 新增类，产品版 V2.6 一期确认） ----------------
+    # 共同红线：确认前不落库（丢弃无痕）；先匹配再新增（CRM 导入时同名查重）；
+    # 必填缺失追问补齐（draft 图 interrupt）；只写本人权限内对象（CRM 正式 Service 判定）。
+    "customer.draft": CapabilitySpec(
+        name="customer.draft",
+        kind="extract",
+        graph_version=DRAFT_GRAPH_VERSION,
+        prompt_version="draft-prompt@1",
+        description="助手新增客户草稿：语音/文字整理客户建档字段，本人确认后由 CRM 写入",
+        read_only=True,  # AI 侧只产草稿；正式写入在 CRM 本人确认后
+        requires_text=True,
+        requires_facts=False,
+        required_input_fields=("text",),
+        draft_type="customer",
+        entry_conditions=('用户主动发起新增客户', '同名客户先提示已存在（改为补增或换名）'),
+        return_path='customer:detail:{draft.customer_id}',
+    ),
+    "contact.draft": CapabilitySpec(
+        name="contact.draft",
+        kind="extract",
+        graph_version=DRAFT_GRAPH_VERSION,
+        prompt_version="draft-prompt@1",
+        description="助手新增/补充联系人草稿：挂到指定客户，本人确认后由 CRM 写入",
+        read_only=True,
+        requires_text=True,
+        requires_facts=False,
+        required_input_fields=("text",),
+        draft_type="contact",
+        entry_conditions=('用户主动发起新增联系人', '所属客户须先匹配（同名客户先提示已存在）'),
+        return_path='customer:detail:{draft.customer_id}',
+    ),
+    "lead.draft": CapabilitySpec(
+        name="lead.draft",
+        kind="extract",
+        graph_version=DRAFT_GRAPH_VERSION,
+        prompt_version="draft-prompt@1",
+        description="助手登记线索草稿：整理线索内容与联系方式，本人确认后由 CRM 写入",
+        read_only=True,
+        requires_text=True,
+        requires_facts=False,
+        required_input_fields=("text",),
+        draft_type="lead",
+        entry_conditions=('用户主动发起登记线索',),
+        return_path='lead:detail:{draft.lead_id}',
+    ),
+    "opportunity.draft": CapabilitySpec(
+        name="opportunity.draft",
+        kind="extract",
+        graph_version=DRAFT_GRAPH_VERSION,
+        prompt_version="draft-prompt@1",
+        description="助手新增商机草稿：挂到指定客户，本人确认后由 CRM 写入",
+        read_only=True,
+        requires_text=True,
+        requires_facts=False,
+        required_input_fields=("text",),
+        draft_type="opportunity",
+        entry_conditions=('用户主动发起新增商机', '所属客户须先匹配'),
+        return_path='opportunity:detail:{draft.opportunity_id}',
     ),
 }
 

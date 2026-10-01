@@ -14,8 +14,9 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from app.capabilities import QA_GRAPH_VERSION, capability_versions, get_capability
+from app.capabilities import DRAFT_GRAPH_VERSION, QA_GRAPH_VERSION, capability_versions, get_capability
 from app.graphs.analysis import build_analysis_graph, compile_analysis_graph
+from app.graphs.draft import build_draft_graph, compile_draft_graph
 from app.graphs.qa import build_qa_graph, compile_qa_graph
 from app.graphs.nodes import (
     ask_missing_node,
@@ -64,6 +65,8 @@ def build_graph_for(capability: str, model: BaseChatModel) -> StateGraph:
     spec = get_capability(capability)
     if spec is None:
         raise ValueError(f"未知能力: {capability}")
+    if spec.kind == "extract" and spec.graph_version == DRAFT_GRAPH_VERSION:
+        return build_draft_graph(spec, model)
     if spec.kind == "extract":
         return build_graph(model)
     if not spec.prompt_template:
@@ -79,6 +82,8 @@ def compile_graph_for(
     spec = get_capability(capability)
     if spec is None:
         raise ValueError(f"未知能力: {capability}")
+    if spec.kind == "extract" and spec.graph_version == DRAFT_GRAPH_VERSION:
+        return compile_draft_graph(spec, model, checkpointer=checkpointer)
     if spec.kind == "extract":
         return compile_graph(model, checkpointer=checkpointer)
     if spec.graph_version == QA_GRAPH_VERSION:
