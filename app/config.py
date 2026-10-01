@@ -120,6 +120,18 @@ class WorkerSettings(BaseModel):
     reap_interval_seconds: float = 5.0
 
 
+class ConversationsSettings(BaseModel):
+    """会话生命周期（P3 收口）：TTL 过期与历史窗口默认值。
+
+    - ttl_hours：最后活动后超过该时长标记 expired（不能续问）。M-01 红线：
+      会话过期只影响恢复语义，绝不改变候选业务状态。0 = 禁用过期清理。
+    - history_window：历史装配/消息列表的默认最近窗口条数。
+    """
+
+    ttl_hours: int = 72
+    history_window: int = 100
+
+
 class PlaygroundSettings(BaseModel):
     """开发联调代理与前端入口；生产一律关闭（路由 404）。"""
 
@@ -165,6 +177,7 @@ class Settings(BaseModel):
     ocr: OcrSettings = Field(default_factory=OcrSettings)
     oss: OssSettings = Field(default_factory=OssSettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
+    conversations: ConversationsSettings = Field(default_factory=ConversationsSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
 
     log_level: str = "INFO"

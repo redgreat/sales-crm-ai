@@ -72,6 +72,11 @@ def _require_owned_run(run: dict[str, Any] | None, operator: OperatorContext) ->
     return run
 
 
+def _closed_word(status: str) -> str:
+    """会话非活跃原因文案：closed=关闭，expired=过期。"""
+    return "关闭" if status == "closed" else "过期"
+
+
 def _dotted(payload: dict[str, Any], path: str) -> Any:
     current: Any = payload
     for part in path.split("."):
@@ -190,6 +195,11 @@ async def create_run(body: CreateRunBody, request: Request, operator: OperatorCo
             raise NotFound("会话不存在")
         if conversation["crm_user_id"] != operator.user_id:
             raise Forbidden("无权访问该会话")
+        # 所有入口一致：closed/expired 会话不能再发起新 Run（对象切换请开新会话）
+        if conversation["status"] != "active":
+            raise ValidationFailed(
+                f"会话已{_closed_word(conversation['status'])}，不能在其中发起能力调用"
+            )
         # 对象绑定会话：input.scope 必须与会话绑定对象一致（需求 4.6 对象内追问）
         if spec.requires_subject_binding:
             scope = (body.input or {}).get("scope") or {}
@@ -311,6 +321,16 @@ async def resume_run(run_id: str, body: ResumeBody, request: Request, operator: 
     _require_owned_run(run, operator)
     if run["status"] != "waiting_input":
         raise RunNotResumable(f"当前状态 {run['status']} 不可恢复")
+    # 会话生命周期一致性：closed/expired 会话里的等待 Run 也不能再恢复
+    # （对象切换/会话结束后，旧等待的补参不再是当前语境）。
+    if run.get("conversation_id"):
+        conversation = await conversations_repo.get_conversation(
+            request.app.state.pool, str(run["conversation_id"])
+        )
+        if conversation is not None and conversation["status"] != "active":
+            raise ValidationFailed(
+                f"会话已{_closed_word(conversation['status'])}，不能恢复其中的等待 Run"
+            )
 
     graph = request.app.state.graphs.get(run["capability"])
     if graph is None:

@@ -5,10 +5,11 @@
 """
 from __future__ import annotations
 
+import uuid
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import require_operator
@@ -69,12 +70,23 @@ async def create_conversation(
 
 @router.get("/{conversation_id}/messages")
 async def list_messages(
-    conversation_id: str, request: Request, operator: OperatorContext = Depends(require_operator)
+    conversation_id: str,
+    request: Request,
+    operator: OperatorContext = Depends(require_operator),
+    limit: int = Query(default=100, ge=1, le=500),
+    before_seq: int | None = Query(default=None, ge=1),
 ) -> dict[str, Any]:
+    """会话消息：默认返回最近 `limit` 条（时间正序）；`before_seq` 向更早翻页。
+
+    移动端收起/刷新恢复只需最近窗口；向上翻历史时用上一页最小 seq 作 before_seq。
+    """
     await _require_owned_conversation(request, conversation_id, operator)
-    messages = await conversations_repo.list_messages(request.app.state.pool, conversation_id)
+    messages = await conversations_repo.list_messages(
+        request.app.state.pool, conversation_id, limit=limit, before_seq=before_seq
+    )
     return {
         "conversation_id": conversation_id,
+        "window": {"limit": limit, "before_seq": before_seq},
         "messages": [
             {
                 "seq": m["seq"],
@@ -89,6 +101,11 @@ async def list_messages(
     }
 
 
+def _client_message_key(conversation_id: str, client_key: str) -> str:
+    """客户端幂等键命名空间化：键只在会话内唯一，避免与其他能力的全局键冲突。"""
+    return f"msg:{conversation_id}:{client_key}"
+
+
 @router.post("/{conversation_id}/messages", status_code=202)
 async def post_message(
     conversation_id: str, body: MessageBody, request: Request, operator: OperatorContext = Depends(require_operator)
@@ -96,6 +113,28 @@ async def post_message(
     conversation = await _require_owned_conversation(request, conversation_id, operator)
     if conversation["status"] != "active":
         raise ValidationFailed("会话已结束，不能继续发送消息")
+
+    client_key = (
+        _client_message_key(conversation_id, body.idempotency_key.strip())
+        if (body.idempotency_key or "").strip()
+        else None
+    )
+
+    # 消息级幂等前置检查（M-07 弱网重复提交）：同 key 已受理过则直接返回原 Run，
+    # 不再进入 waiting/新 Run 分支——恢复完成后重试不应产生重复的抽取 Run。
+    if client_key:
+        seen = await conversations_repo.find_message_by_client_key(
+            request.app.state.pool, conversation_id, client_key
+        )
+        if seen is not None and seen.get("run_id"):
+            run = await runs_repo.get_run(request.app.state.pool, str(seen["run_id"]))
+            if run is not None:
+                return {
+                    "mode": "replay",
+                    "run_id": str(run["run_id"]),
+                    "status": run["status"],
+                    "idempotent_replay": True,
+                }
 
     waiting = await runs_repo.find_latest_run_by_status(
         request.app.state.pool, conversation_id=conversation_id, status="waiting_input"
@@ -114,12 +153,15 @@ async def post_message(
                 role="user",
                 content=body.text,
                 run_id=str(waiting["run_id"]),
+                client_key=client_key,
             )
             return {"mode": "resume", "run_id": str(waiting["run_id"]), "status": "queued"}
         # 恢复请求刚被并发处理：落库后按新消息走（下方新建 Run）
 
     settings = request.app.state.settings
-    idempotency_key = body.idempotency_key or f"conv:{conversation_id}:{operator.user_id}"
+    # 每轮消息独立 Run：客户端提供幂等键用客户端的（同 key 重试幂等重放）；
+    # 未提供则一次性键——绝不能用固定会话键，否则第二条消息会重放第一个 Run。
+    idempotency_key = client_key or f"msg:{conversation_id}:auto:{uuid.uuid4().hex}"
     run, created = await runs_repo.create_run(
         request.app.state.pool,
         idempotency_key=idempotency_key,
@@ -138,6 +180,7 @@ async def post_message(
         role="user",
         content=body.text,
         run_id=str(run["run_id"]),
+        client_key=client_key,
     )
     return {"mode": "new_run", "run_id": run["run_id"], "status": run["status"], "idempotent_replay": not created}
 

@@ -100,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         max_attempts_default=settings.worker.max_attempts,
                         backoff_base_seconds=settings.worker.backoff_base_seconds,
                         batch_size=1,
+                        conversations_ttl_hours=settings.conversations.ttl_hours,
                     )
                     stop_event = asyncio.Event()
                     app.state.stop_event = stop_event

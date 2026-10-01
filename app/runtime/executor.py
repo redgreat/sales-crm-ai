@@ -59,6 +59,7 @@ class Executor:
         max_attempts_default: int = 3,
         backoff_base_seconds: float = 2.0,
         batch_size: int = 4,
+        conversations_ttl_hours: int = 72,
     ):
         self.pool = pool
         self.graphs = graphs
@@ -66,6 +67,8 @@ class Executor:
         self.max_attempts_default = max_attempts_default
         self.backoff_base_seconds = backoff_base_seconds
         self.batch_size = batch_size
+        # <=0 表示禁用会话 TTL 过期清理
+        self.conversations_ttl_hours = conversations_ttl_hours
 
     @property
     def worker_id(self) -> str:
@@ -276,6 +279,17 @@ class Executor:
             logger.info("requeued %d runs with expired leases", len(requeued))
         return len(requeued)
 
+    async def expire_stale_conversations(self) -> int:
+        """会话 TTL 过期清理（P3）：只改会话状态，不碰任何候选/Run 业务状态。"""
+        if self.conversations_ttl_hours <= 0:
+            return 0
+        expired = await conversations_repo.expire_stale_conversations(
+            self.pool, ttl_hours=self.conversations_ttl_hours
+        )
+        if expired:
+            logger.info("expired %d stale conversations (ttl=%dh)", expired, self.conversations_ttl_hours)
+        return expired
+
 
 async def run_worker_loop(
     executor: Executor,
@@ -283,15 +297,23 @@ async def run_worker_loop(
     poll_interval_seconds: float,
     reap_interval_seconds: float,
     stop_event: asyncio.Event,
+    conversation_sweep_interval_seconds: float = 600.0,
 ) -> None:
-    """worker 主循环：扫描队列 + 周期回收过期租约。"""
+    """worker 主循环：扫描队列 + 周期回收过期租约 + 低频会话 TTL 清理。"""
     last_reap = 0.0
+    last_sweep = 0.0
     while not stop_event.is_set():
         processed = await executor.run_batch()
         now = time.monotonic()
         if now - last_reap >= reap_interval_seconds:
             await executor.reap_expired_leases()
             last_reap = now
+        if now - last_sweep >= conversation_sweep_interval_seconds:
+            try:
+                await executor.expire_stale_conversations()
+            except Exception:  # noqa: BLE001 —— 清理失败不影响队列主流程
+                logger.exception("conversation ttl sweep failed")
+            last_sweep = now
         if not processed:
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=poll_interval_seconds)
