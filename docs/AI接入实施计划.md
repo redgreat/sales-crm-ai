@@ -59,15 +59,16 @@ P0 基线 → P1 裁剪骨架 → P2 可靠执行 → P3 最小多轮 → P4 CRM
 
 ## 6. P4：CRM 直接集成与文字闭环（进行中，真实闭环未验收）
 
-- [x] CRM 集成骨架已存在：Run/pending/resume 代理、候选导入/列表/确认/忽略/重试、服务签名、活动/任务实体及 Mapper。（当前工作区未提交代码，见核验记录。）
-- [ ] 先处理两个 V010 迁移版本冲突；核验已执行历史后分配新版本，不盲改已执行迁移。
-
-- [ ] CRM Java 仅增加集成薄层：认证上下文、事实查询、Run 代理/结果拉取、候选导入；不再实现模型编排或记忆。
-- [ ] 冻结服务认证和最小用户授权凭据；Python 不直连 CRM 库，CRM 不暴露模型 Key。
-- [ ] 沟通/会议产生建议 → CRM 幂等导入候选 → 用户补齐/确认 → 正式活动/任务 Service；真实业务接口缺失显式补在 CRM，不造 Python 正式任务表。
+- [x] CRM 集成骨架已存在：Run/pending/resume 代理、候选导入/列表/确认/忽略/重试、服务签名、活动/任务实体及 Mapper。（已随 9598222/8c82dd7 提交进 service_dev_ai 分支。）
+- [x] V010 迁移版本冲突已解决（2026-10-01，用户授权 MCP 直接操作 zrcrm 库）：分支快进 origin/master 取回 V014-V017；冲突脚本定版 `V018__ai_agent_candidates.sql`（`confirmed_by`→`confirmed_by_id` 对齐实体，全幂等）；新增 `V019__work_tasks_extract.sql`。两版本均已在 zrcrm 库执行并登记 flyway history（rank 19/20，checksum 按 LineChecksum 算法核对，且 validate-on-migrate=false）。
+- [x] 双端事实查询契约已冻结（2026-10-01，见 [`docs/P4-双端集成契约.md`](./P4-双端集成契约.md)）：Java 新增 `GET /ai/integration/facts/{subjectType}/{subjectId}`（customer/lead/opportunity），删除旧 POST customer 专用端点；**修复 Python 签名 path 口径缺陷**（原签相对路径，Java 验签用完整 getRequestURI，必 401——现从 base_url 提取应用前缀）；`tests/test_p4_contract.py` 5 passed（MockTransport 验证方法/路径/签名重构/响应解析/401 透传）。
+- [x] 任务候选确认写入已切换正式 Service（2026-10-01）：`TaskService.createFromExtract` → **work_tasks 统一任务表**（source=EXTRACT，V019 加幂等键/客户锚点/候选关联三列），本人确认=OPEN、指派他人=PENDING_ACCEPT（正式指派权限 canManageRelation，弃用 AI 专用 R1/R2 判定），并发确认由幂等唯一索引兜底；`sales_task` 停止写入。
+- [ ] CRM Java 仅增加集成薄层：认证上下文、事实查询、Run 代理/结果拉取、候选导入；不再实现模型编排或记忆。（骨架符合；活动写入仍由集成服务事务内 Mapper 直插——CRM 无独立 ActivityService，活动管理入口属后续迭代，见契约文档 §4。）
+- [x] 冻结服务认证和最小用户授权凭据；Python 不直连 CRM 库，CRM 不暴露模型 Key。（签名方案双端逐字段一致；密钥经环境变量注入。）
+- [ ] 沟通/会议产生建议 → CRM 幂等导入候选 → 用户补齐/确认 → 正式活动/任务 Service；真实业务接口缺失显式补在 CRM，不造 Python 正式任务表。（任务侧闭环已具备；活动侧待 ActivityService 收敛。）
 - [x] 顺序重复导入查既有候选、先活动后任务及按原业务键查正式对象的基础代码已有。（不等于并发和故障恢复通过。）
-- [ ] 补齐稳定客户端请求键、来源/结果/候选版本、明确勾选项集合、确认快照、员工和客户数据权限；正式写入复用完整业务 Service，回执/审计一致性与响应丢失对账通过。
-- [ ] 验证「正式提交成功但响应丢失」、重复确认、候选版本改变、无指派权限、来源撤权和跨用户查询。
+- [ ] 补齐稳定客户端请求键、来源/结果/候选版本、明确勾选项集合、确认快照、员工和客户数据权限；正式写入复用完整业务 Service，回执/审计一致性与响应丢失对账通过。（客户同名匹配仍未走数据范围规则；confirm 的 override 仍非明确勾选集合。）
+- [ ] 验证「正式提交成功但响应丢失」、重复确认、候选版本改变、无指派权限、来源撤权和跨用户查询。（需 CRM 应用本地真实运行，本轮未执行。）
 
 验收：真实文字生成到正式业务写入闭环；Stub/模拟确认不算。记录涉及 CRM 仓库的分支、变更文件和联调版本，不整体合并旧 AI 分支。
 

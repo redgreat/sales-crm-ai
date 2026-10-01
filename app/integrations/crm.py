@@ -11,6 +11,7 @@ import httpx
 
 from app.auth import OperatorContext, sign_request
 from app.config import Settings
+from urllib.parse import urlparse
 
 
 class CrmFactsClient(Protocol):
@@ -20,10 +21,16 @@ class CrmFactsClient(Protocol):
 
 
 class HttpCrmFactsClient:
-    """真实 CRM 客户端：GET /ai/integration/facts/{subject_type}/{subject_id}。"""
+    """真实 CRM 客户端：GET {base_url}/ai/integration/facts/{subject_type}/{subject_id}。
+
+    签名 path 口径与 CRM 侧 AiServiceSignatureFilter 验签一致（request.getRequestURI，
+    含应用前缀）：base_url 形如 http://host:8080/api/v1/salescrm 时，签名串里的 path
+    是 /api/v1/salescrm/ai/integration/facts/...，而不是去掉前缀的相对路径。
+    """
 
     def __init__(self, settings: Settings, http_client: httpx.AsyncClient | None = None):
         self._settings = settings
+        self._path_prefix = urlparse(str(settings.crm.base_url)).path.rstrip("/")
         self._client = http_client or httpx.AsyncClient(
             base_url=settings.crm.base_url,
             timeout=settings.crm.timeout_seconds,
@@ -32,15 +39,16 @@ class HttpCrmFactsClient:
     async def query_object_facts(
         self, *, operator: OperatorContext, subject_type: str, subject_id: str
     ) -> dict[str, Any]:
-        path = f"/ai/integration/facts/{subject_type}/{subject_id}"
+        relative_path = f"/ai/integration/facts/{subject_type}/{subject_id}"
+        signed_path = f"{self._path_prefix}{relative_path}"
         headers = sign_request(
             secret=self._settings.crm.secret,
             key_id=self._settings.crm.key_id,
             method="GET",
-            path=path,
+            path=signed_path,
             operator=operator,
         )
-        response = await self._client.get(path, headers=headers)
+        response = await self._client.get(relative_path, headers=headers)
         response.raise_for_status()
         return response.json()
 
