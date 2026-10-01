@@ -234,4 +234,5 @@ frontend/.svelte-kit/
 frontend/build/
 
 # ---- local dev/test scripts (may contain secrets/tokens, e.g. get_crm_token.py) ----
-scripts/
+scripts/*
+!scripts/crm_facts_live_check.py
