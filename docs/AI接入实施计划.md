@@ -79,7 +79,7 @@ P0 基线 → P1 裁剪骨架 → P2 可靠执行 → P3 最小多轮 → P4 CRM
 
 - [x] 需求 4.4/4.5/4.10/4.11：日报、对象摘要、今日任务、主管关注；三项预生成由 CRM 发起，受益人权限及调度幂等明确。（第一工作包 2026-09-29：`app/graphs/analysis.py` 只读分析图 + `pregen_idempotency_key` 调度幂等，`tests/test_p5_analysis.py` 12 passed）
 - [x] 需求 4.6～4.9：对象/跨对象/知识问答及会前准备；知识生成前授权过滤、版本引用、历史撤权；只读不写正式字段。（第二工作包 2026-09-29：`app/graphs/qa.py` 问答图 `analysis-qa@1`；知识授权过滤在 SQL 检索层、先于内容进入模型；会话历史仅作 `[H]` 上下文且不进引用白名单；无依据时不调用模型；`tests/test_p5_knowledge.py` **12 passed**）
-- [ ] 需求 4.12～4.16：ASR、OCR、普通文件解析、大圆及知识索引同步逐项 POC，来源定位、发布/停用和失败重试。（**部分**：4.16 知识授权索引同步已完成——`ai_knowledge_docs`（迁移 `0002_knowledge.sql`）、发布/停用同步接口、授权过滤检索、撤权立即生效；4.14 普通文件解析**已完成**（`app/integrations/files.py` + `POST /api/v1/files/parse`，纯文本类，14 项测试）；4.12/4.13 **适配层已就绪、待真实凭据联调**（步骤见 [`docs/ASR-OCR联调手册.md`](./ASR-OCR联调手册.md)）；4.15 大圆未开始）
+- [ ] 需求 4.12～4.16：ASR、OCR、普通文件解析、大圆及知识索引同步逐项 POC，来源定位、发布/停用和失败重试。（**部分**：4.16 知识授权索引同步已完成——`ai_knowledge_docs`（迁移 `0002_knowledge.sql`）、发布/停用同步接口、授权过滤检索、撤权立即生效；4.14 普通文件解析**已完成**（`app/integrations/files.py` + `POST /api/v1/files/parse`，纯文本类，14 项测试）；4.12/4.13 **真实 POC 已于 2026-10-02 通过**（`scripts/ocr_poc.py` 8 区域带坐标锚点；`scripts/asr_poc.py` 三步链路+时间锚点；凭据已配置；OSS 本地文件链路待 OSS 就绪补验；4.15 大圆无对外 API 维持未开始））
 
   > **2026-09-29 第三工作包：ASR/OCR 适配层（不含真实联调）**
   >

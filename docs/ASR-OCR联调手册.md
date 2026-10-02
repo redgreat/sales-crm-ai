@@ -88,3 +88,10 @@ export SAI_ASR_API_KEY=<...>
   2. SDK 的 `*_async` 链路在 tea-openapi 0.4.6 组合下处理二进制 body 抛 "object bytes can't be used in 'await'" → 改为同步方法 + `asyncio.to_thread`；
   3. Tea 模型响应需 `to_map()` 转字典；解析对齐真实结构 `sub_images[].block_info.block_details[].block_content/block_points`（camelCase + 大写 X/Y）。
 - OCR 单元测试 20 passed（含新增真实结构解析），无回归。
+
+## ASR POC 完成记录（2026-10-02）
+
+- **结论：4.12 ASR 真实链路已通过**。`scripts/asr_poc.py`（本地）用官方公网示例音频（dashscope.oss welcome.mp3）走通三步链路：提交任务（X-DashScope-Async）→ 轮询 → 下载 transcription_url；转写全文正确、sentences 带时间戳、`[HH:MM:SS]` 时间锚点渲染正常；说话人分离输出 speaker_id（示例音频单说话人，字段提取逻辑由单元测试覆盖）。
+- **凭据**：用户提供业务空间 DashScope API Key（sk-ws- 前缀）已入 `conf/config.yml` 的 `asr.*`，`enabled: true`，默认域名调用成功；paraformer-v2，免费额度 36,000 秒。
+- **注意**：百炼只收公网 URL——本地录音文件链路依赖 OSS（`oss.*` 未配置）；OSS 就绪后补验「本地文件 → 上传 → 签名 URL → 识别」完整链路。
+- **至此 4.12/4.13 POC 全部完成**；4.15（企微大圆）无对外 API，维持未开始；P5 增强输入仅剩 OSS 本地文件链路与 4.15。
