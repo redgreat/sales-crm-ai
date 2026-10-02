@@ -17,6 +17,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -106,12 +108,27 @@ class AliyunOcrClient:
             kwargs["body"] = _to_stream(image_bytes)
 
         request = RecognizeAllTextRequest(**kwargs)
-        response = await self._client.recognize_all_text_with_options_async(request, _runtime())
-        body = getattr(response, "body", None) or {}
-        data = strip_usage_metadata(getattr(body, "data", None) or {})
+        # 用同步方法 + to_thread：SDK 的 *_async 链路在 tea-openapi 0.4.6 组合下
+        # 处理二进制 body 时抛 "object bytes can't be used in 'await'"（2026-10-02 POC 实测），
+        # 同步路径成熟稳定，线程外移避免阻塞事件循环。
+        response = await asyncio.to_thread(
+            self._client.recognize_all_text_with_options, request, _runtime()
+        )
+        body = getattr(response, "body", None)
+        data = strip_usage_metadata(_tea_to_map(getattr(body, "data", None)))
         if not isinstance(data, dict) or not data:
             raise OcrError("OCR 未返回识别结果（data 为空）")
         return _parse(data)
+
+
+def _tea_to_map(value: Any) -> Any:
+    """Tea SDK 模型 → dict（模型只有 to_map()，属性访问不产出 dict）。"""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    to_map = getattr(value, "to_map", None)
+    return to_map() if callable(to_map) else value
 
 
 def _to_stream(image_bytes: bytes | None) -> Any:
@@ -122,13 +139,15 @@ def _to_stream(image_bytes: bytes | None) -> Any:
 
 
 def _runtime() -> Any:
-    from alibabacloud_darabonba_runtime.models import RuntimeOptions
+    # RuntimeOptions 在 tea-util 包（alibabacloud_darabonba_runtime 并不存在——
+    # 2026-10-02 POC 实测修正）
+    from alibabacloud_tea_util.models import RuntimeOptions
 
     return RuntimeOptions()
 
 
 def _parse(data: dict[str, Any]) -> OcrResult:
-    text = str(data.get("content") or data.get("text") or "").strip()
+    text = str(data.get("content") or data.get("Content") or data.get("text") or "").strip()
     regions = _extract_regions(data)
     if not text and not regions:
         raise OcrError("OCR 结果既无全文也无文本区域（无法形成可用结果）")
@@ -138,21 +157,45 @@ def _parse(data: dict[str, Any]) -> OcrResult:
 
 
 def _extract_regions(data: dict[str, Any]) -> tuple[OcrRegion, ...]:
-    """宽容提取带坐标区域；字段名以官方返回为准，缺失坐标时仍保留文本。"""
+    """提取带坐标区域。
+
+    RecognizeAllText 高精版真实返回（2026-10-02 POC 实测）：
+      sub_images[].block_info.block_details[].block_content / block_points([{"X":..,"Y":..}])
+    其他键保留宽容匹配，缺失坐标时仍保留文本。
+    """
     regions: list[OcrRegion] = []
-    for key in ("regions", "lines", "words", "blocks"):
-        items = data.get(key)
-        if not isinstance(items, list):
+    for sub in data.get("sub_images") or data.get("SubImages") or []:
+        if not isinstance(sub, dict):
             continue
-        for item in items:
+        block_info = sub.get("block_info") or sub.get("BlockInfo") or {}
+        details = block_info.get("block_details") or block_info.get("BlockDetails") or []
+        for item in details:
             if not isinstance(item, dict):
                 continue
-            region_text = str(item.get("text") or item.get("content") or "").strip()
+            region_text = str(
+                item.get("block_content") or item.get("BlockContent")
+                or item.get("text") or item.get("content") or ""
+            ).strip()
             if not region_text:
                 continue
-            regions.append(OcrRegion(text=region_text, points=_extract_points(item)))
+            points_raw = item.get("block_points") or item.get("BlockPoints") or []
+            regions.append(OcrRegion(text=region_text, points=_extract_points({"points": points_raw})))
         if regions:
             break
+    if not regions:
+        for key in ("regions", "lines", "words", "blocks"):
+            items = data.get(key)
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                region_text = str(item.get("text") or item.get("content") or "").strip()
+                if not region_text:
+                    continue
+                regions.append(OcrRegion(text=region_text, points=_extract_points(item)))
+            if regions:
+                break
     return tuple(regions)
 
 
@@ -162,7 +205,7 @@ def _extract_points(item: dict[str, Any]) -> tuple[tuple[float, float], ...]:
         # 形式一：[{"x":..,"y":..}, ...]
         if isinstance(raw[0], dict):
             points = [
-                (float(p.get("x", 0)), float(p.get("y", 0)))
+                (float(p.get("x", p.get("X", 0))), float(p.get("y", p.get("Y", 0))))
                 for p in raw
                 if isinstance(p, dict)
             ]

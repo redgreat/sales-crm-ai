@@ -78,3 +78,13 @@ export SAI_ASR_API_KEY=<...>
 - 实时会议转写、工作手机后台录音自动采集 —— **不在本期**（移动端 PRD 对齐 M-04）。
 - 说话人映射到具体员工 —— 需求明确禁止。
 - ASR/OCR 结果直接写入正式业务对象 —— 一律走候选 + 人工确认。
+
+## OCR POC 完成记录（2026-10-02）
+
+- **结论：4.13 OCR 真实链路已通过**。`scripts/ocr_poc.py`：Pillow 生成含中文的测试图（瑞赢 CRM 客户拜访记录/日期/金额）→ `RecognizeAllText`（Type=Advanced，OutputCoordinate=points，二进制 body 直传）→ 全文与 8 个文本区域全部识别正确且带原图坐标锚点（`<R#@x,y,...>`）。
+- **凭据**：AccessKey（用户提供）已入 `conf/config.yml` 的 `ocr.*`，`enabled: true`；服务后付费（免费额度每月 200 次）。
+- **POC 暴露并修复的适配层缺陷**（`app/integrations/ocr.py`，此前仅 Mock 测试未真实联调）：
+  1. `RuntimeOptions` import 错误（`alibabacloud_darabonba_runtime` 包不存在 → 实际在 `alibabacloud_tea_util.models`）；
+  2. SDK 的 `*_async` 链路在 tea-openapi 0.4.6 组合下处理二进制 body 抛 "object bytes can't be used in 'await'" → 改为同步方法 + `asyncio.to_thread`；
+  3. Tea 模型响应需 `to_map()` 转字典；解析对齐真实结构 `sub_images[].block_info.block_details[].block_content/block_points`（camelCase + 大写 X/Y）。
+- OCR 单元测试 20 passed（含新增真实结构解析），无回归。
