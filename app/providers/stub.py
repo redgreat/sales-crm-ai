@@ -49,6 +49,8 @@ def parse_draft_text(user_text: str) -> dict[str, Any]:
     for key, aliases in {
         "name": ("客户名称", "客户", "公司", "商机名称", "名称"),
         "customer_type": ("客户类型",),
+        "region": ("经营区域", "区域"),
+        "biz_line": ("业务线",),
         "customer_name": ("所属客户", "所属客户名称", "客户"),
         "contact_name": ("联系人", "联系人姓名"),
         "mobile": ("电话", "手机", "联系方式"),

@@ -9,8 +9,11 @@
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import uuid
+import time
 from pathlib import Path
 
 import httpx
@@ -35,6 +38,23 @@ async def crm():
         yield client
 
 
+
+
+async def _wait_run_succeeded(crm: httpx.AsyncClient, run_id: str, timeout: float = 120) -> dict:
+    """轮询 CRM 代理的 Run 状态直到 succeeded（真实模型单次 20~25s）。"""
+    deadline = time.monotonic() + timeout
+    last = {}
+    while time.monotonic() < deadline:
+        resp = await crm.get(f"/ai/runs/{run_id}")
+        body = resp.json() if resp.status_code == 200 else {}
+        last = body
+        if body.get("status") in ("succeeded", "failed", "cancelled"):
+            assert body["status"] == "succeeded", f"Run 终态非成功: {body.get('error')}"
+            return body
+        await asyncio.sleep(3)
+    raise AssertionError(f"等待 Run {run_id} 成功超时，最后状态: {last.get('status')}")
+
+
 def _unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
@@ -43,9 +63,10 @@ def _unique_name(prefix: str) -> str:
 async def test_customer_draft_end_to_end_writes_formal_customer(crm):
     """新增客户全链路：草稿 → 导入 → 确认 → 正式客户存在；重复确认幂等。"""
     name = _unique_name("联测客户")
-    created = await crm.post("/ai/runs", json={"text": f"新增客户：{name}，客户类型：ORG"})
+    created = await crm.post("/ai/runs", json={"capability": "customer.draft", "text": f"新增客户：{name}，客户类型：ORG，经营区域：华东，业务线：车电业务线"})
     assert created.status_code in (200, 201, 202), created.text
     run_id = created.json()["run_id"]
+    await _wait_run_succeeded(crm, run_id)
 
     imported = await crm.post(f"/ai/runs/{run_id}/import-draft")
     assert imported.status_code in (200, 201), imported.text
@@ -53,7 +74,8 @@ async def test_customer_draft_end_to_end_writes_formal_customer(crm):
     assert candidate["candidate_type"] == "CUSTOMER"
     assert candidate["match_status"] == "UNMATCHED"
 
-    confirmed = await crm.post(f"/ai/candidates/{candidate['id']}/confirm-draft", json={})
+    confirmed = await crm.post(f"/ai/candidates/{candidate['id']}/confirm-draft",
+                               json={"similar_continue_reason": "AI 联测数据，确认为新客户"})
     assert confirmed.status_code in (200, 201), confirmed.text
     body = confirmed.json()
     assert body["write_status"] == "WRITTEN"
@@ -71,8 +93,9 @@ async def test_customer_draft_end_to_end_writes_formal_customer(crm):
 async def test_duplicate_customer_name_is_rejected_with_hint(crm):
     """先匹配再新增：同名客户确认被拒绝并给出「改为补增」提示（M20 红线）。"""
     existing_name = "上海澜途汽车服务有限公司"  # zrcrm 库真实客户
-    created = await crm.post("/ai/runs", json={"text": f"新增客户：{existing_name}，客户类型：ORG"})
+    created = await crm.post("/ai/runs", json={"capability": "customer.draft", "text": f"新增客户：{existing_name}，客户类型：ORG，经营区域：华东，业务线：车电业务线"})
     run_id = created.json()["run_id"]
+    await _wait_run_succeeded(crm, run_id)
     imported = await crm.post(f"/ai/runs/{run_id}/import-draft")
     candidate = imported.json()
     assert candidate["match_status"] == "MATCHED"
@@ -87,12 +110,14 @@ async def test_duplicate_customer_name_is_rejected_with_hint(crm):
 async def test_lead_draft_end_to_end(crm):
     """登记线索：草稿 → 导入 → 确认 → 正式线索（来源 LS-MANUAL，幂等键 ai:run:item）。"""
     content = f"联测线索-{uuid.uuid4().hex[:8]}：客户想了解仓储改造方案"
-    created = await crm.post("/ai/runs", json={"text": f"登记线索：{content}，联系人：测试，电话：13800001111"})
+    created = await crm.post("/ai/runs", json={"capability": "lead.draft", "text": f"登记线索：{content}，联系人：测试，电话：13800001111"})
     run_id = created.json()["run_id"]
+    await _wait_run_succeeded(crm, run_id)
     imported = await crm.post(f"/ai/runs/{run_id}/import-draft")
     candidate = imported.json()
     assert candidate["candidate_type"] == "LEAD"
-    confirmed = await crm.post(f"/ai/candidates/{candidate['id']}/confirm-draft", json={})
+    confirmed = await crm.post(f"/ai/candidates/{candidate['id']}/confirm-draft",
+                               json={"similar_continue_reason": "AI 联测数据，确认为新线索"})
     assert confirmed.status_code in (200, 201), confirmed.text
     body = confirmed.json()
     assert body["write_status"] == "WRITTEN" and body["formal_id"]

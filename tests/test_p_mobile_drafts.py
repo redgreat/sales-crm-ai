@@ -138,11 +138,12 @@ async def test_customer_draft_asks_missing_and_completes(dev_api):
     pending = await _get(client, settings, f"/api/v1/runs/{run_id}/pending")
     questions = pending.json()["questions"]
     fields_asked = {q["field"] for q in questions}
-    assert "customer_type" in fields_asked  # 缺什么追问什么
+    assert {"customer_type", "region", "biz_line"} <= fields_asked  # 缺什么追问什么
     state_version = pending.json()["state_version"]
 
     resumed = await _post(client, settings, f"/api/v1/runs/{run_id}/resume",
-                          {"values": {"fields": {"customer_type": "ORG"}}, "state_version": state_version})
+                          {"values": {"fields": {"customer_type": "ORG", "region": "华东", "biz_line": "车电业务线"}},
+                           "state_version": state_version})
     assert resumed.status_code == 202
 
     final = await _wait_status(client, settings, run_id, {"succeeded"})
@@ -150,6 +151,8 @@ async def test_customer_draft_asks_missing_and_completes(dev_api):
     assert draft["draft_type"] == "customer"
     assert draft["fields"]["name"] == "上海远大物流有限公司"
     assert draft["fields"]["customer_type"] == "ORG"
+    assert draft["fields"]["region"] == "华东"
+    assert draft["fields"]["biz_line"] == "车电业务线"
     assert draft["fields"]["industry"] == "仓储物流"
     # 来源标记（M20 红线：每次写入标记来源=助手）
     assert final["result"]["references"]["source"] == "assistant.draft"

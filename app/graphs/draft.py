@@ -31,7 +31,12 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 # 各草稿类型的必填业务字段（缺失即追问；与 CRM 确认写入的 DTO 必填一致）
 DRAFT_REQUIRED_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
     # (字段, 追问话题)
-    "customer": (("name", "客户名称"), ("customer_type", "客户类型（如 ORG 企业客户 / IND 个体客户）")),
+    "customer": (
+        ("name", "客户名称"),
+        ("customer_type", "客户类型（ORG 企业客户 / IND 个体客户）"),
+        ("region", "经营区域（华东/华南/华北/全国）"),
+        ("biz_line", "业务线（如：车电业务线/车务业务线/新能源业务线）"),
+    ),
     "contact": (("customer_name", "所属客户名称"), ("contact_name", "联系人姓名")),
     "lead": (("raw_content", "线索内容（客户意向/需求描述）"),),
     "opportunity": (("customer_name", "所属客户名称"), ("name", "商机名称")),
@@ -67,7 +72,7 @@ _DRAFT_INTENT = {
 }
 
 _DRAFT_FIELD_DESC = {
-    "customer": "name(客户名称) customer_type(ORG/IND) industry legal_person registered_capital registered_address remark",
+    "customer": "name(客户名称) customer_type(ORG/IND) region(经营区域) biz_line(业务线) industry legal_person registered_capital registered_address remark",
     "contact": "customer_name(所属客户) contact_name mobile title dept",
     "lead": "raw_content(线索内容) contact_name contact_phone biz_line region source_desc",
     "opportunity": "customer_name(所属客户) name(商机名称) biz_line expected_close_on remark",
@@ -170,6 +175,9 @@ _DRAFT_FIELD_ALIASES: dict[str, str] = {
     "客户名称": "name",
     "名称": "name",
     "客户类型": "customer_type",
+    "经营区域": "region",
+    "区域": "region",
+    "业务线": "biz_line",
     "所属客户": "customer_name",
     "所属客户名称": "customer_name",
     "客户": "customer_name",
