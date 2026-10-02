@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>瑞赢 AI 联调 H5（测试用）</title>
+<!--
+  生产 H5 形态的测试端（tests/h5/index.html）：企业微信内嵌 H5 的 JWT 链路模拟——
+  浏览器不持任何服务密钥，全部调用经 CRM 代理（/api/v1/salescrm/ai/**）以用户身份执行。
+  用法：先取 token（python scripts/get_crm_token.py --username ZR20050012 --password Za20050012），
+  打开本页粘贴 token；AI 服务与 CRM 实例需已启动（见 docs/测试规范.md）。
+-->
+<style>
+  :root { --brand:#2f54eb; --ok:#389e0d; --warn:#d46b08; --err:#cf1322; --line:#e5e7eb; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:#f2f3f5; color:#1f2329; padding-bottom:40px; }
+  .wrap { max-width:420px; margin:0 auto; padding:12px; }
+  header { position:sticky; top:0; background:var(--brand); color:#fff; padding:10px 12px; font-size:15px; font-weight:600; border-radius:0 0 10px 10px; display:flex; justify-content:space-between; align-items:center; }
+  header .status { font-size:11px; font-weight:400; opacity:.9; }
+  section { background:#fff; border-radius:10px; margin-top:10px; padding:12px; }
+  h2 { font-size:14px; margin-bottom:8px; display:flex; align-items:center; gap:6px; }
+  h2 .tag { font-size:10px; color:#8c8c8c; font-weight:400; }
+  input, select, textarea, button { font-size:13px; border:1px solid var(--line); border-radius:6px; padding:7px 9px; width:100%; }
+  textarea { resize:vertical; min-height:52px; }
+  button { background:var(--brand); color:#fff; border:none; cursor:pointer; margin-top:8px; }
+  button.ghost { background:#fff; color:var(--brand); border:1px solid var(--brand); }
+  button.mini { width:auto; padding:4px 10px; font-size:12px; margin:0; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .row { display:flex; gap:6px; }
+  .row > * { flex:1; }
+  .meta { font-size:11px; color:#8c8c8c; margin-top:4px; }
+  .card { border:1px solid var(--line); border-radius:8px; padding:9px; margin-top:8px; font-size:13px; }
+  .card b { font-size:13px; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:9px; font-size:11px; margin-left:6px; }
+  .pill.ok { background:#f6ffed; color:var(--ok); }
+  .pill.warn { background:#fff7e6; color:var(--warn); }
+  .pill.err { background:#fff1f0; color:var(--err); }
+  .pill.run { background:#e6f4ff; color:#0958d9; }
+  .msg { margin-top:6px; padding:7px 9px; border-radius:8px; font-size:13px; max-width:88%; white-space:pre-wrap; word-break:break-all; }
+  .msg.user { background:var(--brand); color:#fff; margin-left:auto; }
+  .msg.assistant { background:#f2f3f5; }
+  .msg .anchor { display:block; font-size:10px; opacity:.65; margin-top:2px; }
+  .log { font-size:11px; color:#8c8c8c; margin-top:6px; word-break:break-all; max-height:90px; overflow:auto; }
+  .hidden { display:none; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .chip { border:1px solid var(--brand); color:var(--brand); border-radius:14px; padding:4px 10px; font-size:12px; cursor:pointer; background:#fff; }
+  .chip.active { background:var(--brand); color:#fff; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span>🤖 瑞赢 AI · 联调 H5</span>
+    <span class="status" id="connStatus">未连接</span>
+  </header>
+
+  <!-- 登录 -->
+  <section id="secLogin">
+    <h2>1 · 连接 <span class="tag">token 经 .local/crm-token.txt 生成后粘贴</span></h2>
+    <input id="baseUrl" placeholder="CRM 代理地址" value="http://127.0.0.1:18080/api/v1/salescrm">
+    <textarea id="token" placeholder="粘贴 CRM JWT（Bearer eyJ... 或裸 token）"></textarea>
+    <div class="row">
+      <button onclick="connect()">连接</button>
+      <button class="ghost" onclick="loadCapabilities()">加载能力目录</button>
+    </div>
+    <div class="log" id="loginLog"></div>
+  </section>
+
+  <!-- 能力目录（M-12：入口契约由注册表渲染） -->
+  <section id="secCaps" class="hidden">
+    <h2>能力目录 <span class="tag">GET /ai/capabilities（M-12 入口契约）</span></h2>
+    <div id="capList" class="meta">未加载</div>
+  </section>
+
+  <!-- M19 助手会话 -->
+  <section id="secChat">
+    <h2>2 · 瑞赢助手 <span class="tag">M19 会话 · 每轮独立 Run · 确认前不落库</span></h2>
+    <div class="row">
+      <select id="subjectType">
+        <option value="">不绑定对象</option>
+        <option value="customer">customer</option>
+        <option value="lead">lead</option>
+        <option value="opportunity">opportunity</option>
+      </select>
+      <input id="subjectId" placeholder="对象 id（可空）">
+    </div>
+    <button class="ghost" onclick="newConversation()">新建会话</button>
+    <div id="chatBox" style="margin-top:8px"></div>
+    <div id="pendingBox"></div>
+    <textarea id="chatInput" placeholder="说一句…（如：新增客户：远大物流，客户类型：ORG）"></textarea>
+    <div class="row">
+      <button onclick="sendMsg()">发送</button>
+      <button class="ghost" onclick="refreshMessages()">刷新历史</button>
+    </div>
+    <div class="meta" id="chatMeta"></div>
+  </section>
+
+  <!-- M03/M20 草稿与候选 -->
+  <section id="secDraft">
+    <h2>3 · 沟通提炼 / 建档草稿 <span class="tag">M03/M20 · 草稿确认后写入</span></h2>
+    <div class="chips" id="capChips"></div>
+    <textarea id="draftInput" placeholder="沟通内容或建档信息…">客户：恒通物流
+任务：电话回访
+2026-10-08
+负责人：王五</textarea>
+    <button onclick="createAndImport()">提交 → 等待结果 → 导入候选</button>
+    <div id="draftResult"></div>
+    <div class="log" id="draftLog"></div>
+  </section>
+
+  <!-- M07 候选三视图 -->
+  <section id="secCands">
+    <h2>4 · 我的候选 <span class="tag">M07：当前待确认 / 已确认 / 失败</span></h2>
+    <div class="chips" id="viewChips">
+      <span class="chip active" data-status="PENDING_CONFIRM" onclick="switchView(this)">待确认</span>
+      <span class="chip" data-status="CONFIRMED" onclick="switchView(this)">已确认</span>
+      <span class="chip" data-status="" onclick="switchView(this)">全部</span>
+      <span class="chip" data-status="FAILED" onclick="switchView(this)">写入失败</span>
+    </div>
+    <div id="candList" class="meta">—</div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let STATE = { base: '', headers: {}, conversationId: null, currentCapability: 'communication.extract', viewStatus: 'PENDING_CONFIRM' };
+
+function log(id, text) { const el = $(id); el.textContent = (el.textContent ? el.textContent + '\n' : '') + new Date().toLocaleTimeString() + ' ' + text; el.scrollTop = el.scrollHeight; }
+
+async function api(method, path, body) {
+  const resp = await fetch(STATE.base + path, {
+    method, headers: { ...STATE.headers, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let payload = null;
+  try { payload = await resp.json(); } catch { payload = { raw: await resp.text() }; }
+  return { status: resp.status, ok: resp.ok, body: payload };
+}
+
+function pill(text, kind) { return `<span class="pill ${kind}">${text}</span>`; }
+
+function statusPill(status, writeStatus) {
+  const cls = (s) => s === 'WRITTEN' || s === 'succeeded' || s === '已写入' ? 'ok'
+    : s === 'FAILED' || s === 'failed' ? 'err'
+    : (s === 'PENDING_CONFIRM' || s === 'queued' || s === 'waiting_input' || s === 'running') ? 'run' : 'warn';
+  let html = status ? pill(status, cls(status)) : '';
+  if (writeStatus) html += ' ' + pill('写入:' + writeStatus, cls(writeStatus));
+  return html;
+}
+
+async function connect() {
+  STATE.base = $('baseUrl').value.replace(/\/+$/, '');
+  let tk = $('token').value.trim();
+  if (!tk) { log('loginLog', '请粘贴 token'); return; }
+  if (!tk.startsWith('Bearer ')) tk = 'Bearer ' + tk;
+  STATE.headers = { 'Authorization': tk };
+  localStorage.setItem('ry-h5-base', STATE.base);
+  localStorage.setItem('ry-h5-token', tk);
+  const r = await api('GET', '/ai/candidates?status=PENDING_CONFIRM');
+  if (r.ok) {
+    $('connStatus').textContent = '已连接';
+    $('connStatus').style.opacity = 1;
+    $('secCaps').classList.remove('hidden');
+    log('loginLog', '连接成功');
+    loadCapabilities(); switchView($('viewChips').querySelector('.active'));
+  } else {
+    log('loginLog', '连接失败 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 120));
+  }
+}
+
+async function loadCapabilities() {
+  const r = await api('GET', '/ai/capabilities');
+  const list = (r.body && (r.body.capabilities || r.body.CAPABILITIES)) || [];
+  if (!Array.isArray(list)) { $('capList').textContent = JSON.stringify(r.body).slice(0, 200); return; }
+  $('capList').innerHTML = list.map(c => {
+    const ro = c.read_only === false ? pill('产草稿', 'warn') : pill('只读', 'ok');
+    return `<div class="card"><b>${c.capability || c.name}</b> ${ro}
+      <div class="meta">${(c.description || '').slice(0, 70)}</div></div>`;
+  }).join('');
+  // 草稿入口 chips
+  const names = list.map(c => c.capability || c.name);
+  const want = ['communication.extract', 'customer.draft', 'contact.draft', 'lead.draft', 'opportunity.draft'];
+  $('capChips').innerHTML = want.filter(n => names.includes(n))
+    .map(n => `<span class="chip ${n === STATE.currentCapability ? 'active' : ''}" data-cap="${n}" onclick="pickCap(this)">${n}</span>`).join('');
+}
+
+function pickCap(el) {
+  STATE.currentCapability = el.dataset.cap;
+  document.querySelectorAll('#capChips .chip').forEach(c => c.classList.toggle('active', c === el));
+}
+
+// ---------- M19 助手 ----------
+
+async function newConversation() {
+  const r = await api('POST', '/ai/conversations', {
+    subject_type: $('subjectType').value || null,
+    subject_id: $('subjectId').value || null,
+  });
+  if (!r.ok) { log('chatMeta', '建会话失败 ' + JSON.stringify(r.body).slice(0, 120)); return; }
+  STATE.conversationId = r.body.conversation_id;
+  $('chatBox').innerHTML = '';
+  $('chatMeta').textContent = '会话 ' + STATE.conversationId.slice(0, 8) + '…（对象绑定 ' + (r.body.subject_type || '无') + '）';
+}
+
+async function sendMsg() {
+  if (!STATE.conversationId) { await newConversation(); if (!STATE.conversationId) return; }
+  const text = $('chatInput').value.trim();
+  if (!text) return;
+  appendMsg('user', text);
+  $('chatInput').value = '';
+  const r = await api('POST', `/ai/conversations/${STATE.conversationId}/messages`, { text });
+  if (!r.ok) { appendMsg('assistant', '❌ ' + JSON.stringify(r.body).slice(0, 160)); return; }
+  $('chatMeta').textContent = `mode=${r.body.mode} run=${(r.body.run_id || '').slice(0, 8)}…`;
+  pollRun(r.body.run_id, () => { refreshMessages(); checkPending(); });
+}
+
+function appendMsg(role, text, anchor) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.textContent = text;
+  if (anchor) { const a = document.createElement('span'); a.className = 'anchor'; a.textContent = anchor; div.appendChild(a); }
+  $('chatBox').appendChild(div);
+  $('chatBox').scrollTop = $('chatBox').scrollHeight;
+}
+
+async function refreshMessages() {
+  if (!STATE.conversationId) return;
+  const r = await api('GET', `/ai/conversations/${STATE.conversationId}/messages`);
+  if (!Array.isArray(r.body)) return;
+  $('chatBox').innerHTML = '';
+  for (const m of r.body) appendMsg(m.role, m.content);
+}
+
+async function checkPending() {
+  if (!STATE.conversationId) return;
+  const r = await api('GET', `/ai/conversations/${STATE.conversationId}/pending`);
+  if (r.body && r.body.waiting) {
+    const qs = (r.body.questions || []).map(q => q.label || q.field || q.task_title).join('、');
+    $('pendingBox').innerHTML = `<div class="card">⏳ 助手追问：${qs} <span class="meta">state_version=${r.body.state_version}（直接发消息即补参）</span></div>`;
+  } else {
+    $('pendingBox').innerHTML = '';
+  }
+}
+
+function pollRun(runId, onSettled, intervalMs = 3000, maxWaitMs = 120000) {
+  const deadline = Date.now() + maxWaitMs;
+  const timer = setInterval(async () => {
+    const r = await api('GET', `/ai/runs/${runId}`);
+    const s = r.body && r.body.status;
+    if (['succeeded', 'failed', 'cancelled', 'waiting_input'].includes(s) || Date.now() > deadline) {
+      clearInterval(timer);
+      if (onSettled) onSettled(r.body);
+    }
+  }, intervalMs);
+}
+
+// ---------- M03/M20 草稿 ----------
+
+async function createAndImport() {
+  const text = $('draftInput').value.trim();
+  const box = $('draftResult');
+  box.innerHTML = '<div class="meta">提交中…</div>';
+  $('draftLog').textContent = '';
+  const r = await api('POST', '/ai/runs', { capability: STATE.currentCapability, text });
+  if (!r.ok) { box.innerHTML = `<div class="card">❌ 创建失败 ${JSON.stringify(r.body).slice(0, 160)}</div>`; return; }
+  const runId = r.body.run_id;
+  box.innerHTML = `<div class="card">Run ${runId.slice(0, 8)}… ${pill(r.body.status, 'run')} <span class="meta">等待 AI 执行（真实模型约 20-25s）</span></div>`;
+  pollRun(runId, async (run) => {
+    if (run.status !== 'succeeded') {
+      box.innerHTML = `<div class="card">Run ${pill(run.status, run.status === 'failed' ? 'err' : 'warn')} ${run.error ? JSON.stringify(run.error).slice(0, 140) : ''}</div>`;
+      return;
+    }
+    const isDraft = STATE.currentCapability.endsWith('.draft');
+    const imp = await api('POST', `/ai/runs/${runId}/${isDraft ? 'import-draft' : 'import'}`);
+    if (!imp.ok) { box.innerHTML = `<div class="card">导入失败 ${imp.status} ${JSON.stringify(imp.body).slice(0, 140)}</div>`; log('draftLog', imp.status + ' ' + JSON.stringify(imp.body)); return; }
+    renderCandidate(imp.body);
+    switchView($('viewChips').querySelector('.active'));
+  });
+}
+
+function renderCandidate(c) {
+  const isDraft = c.draft_payload !== undefined;
+  const fields = (() => { try { return JSON.parse(c.draft_payload || '{}').fields || {}; } catch { return {}; } })();
+  $('draftResult').innerHTML = `
+    <div class="card">
+      <b>${c.title || c.candidate_type}</b> ${pill(c.candidate_type, 'run')} ${statusPill(c.status, c.write_status)}
+      <div class="meta">候选 ${c.id} · 匹配 ${c.match_status}${c.customer_id ? ' · 客户 ' + c.customer_id : ''}</div>
+      ${Object.keys(fields).length ? `<div class="meta">草稿字段：${Object.entries(fields).map(([k, v]) => k + '=' + v).join('  ')}</div>` : ''}
+      ${c.match_hint ? `<div class="meta" style="color:var(--warn)">⚠ ${c.match_hint}</div>` : ''}
+      ${c.write_error ? `<div class="meta" style="color:var(--err)">✗ ${c.write_error}</div>` : ''}
+      ${c.formal_id ? `<div class="meta" style="color:var(--ok)">✔ 正式对象 ${c.formal_id}</div>` : ''}
+      <div class="row" style="margin-top:8px">
+        <input id="ovr_${c.id}" placeholder='确认覆盖项 JSON（可空），如 {"customer_type":"ORG"}'>
+        <button class="mini" onclick="confirmCand('${c.id}')">${isDraft ? '确认写入' : '确认'}</button>
+        <button class="mini ghost" onclick="ignoreCand('${c.id}')">忽略</button>
+      </div>
+      ${c.run_id ? `<button class="mini ghost" style="margin-top:6px" onclick="retryRun('${c.run_id}')">写入失败重试（原幂等键）</button>` : ''}
+    </div>`;
+}
+
+async function confirmCand(id) {
+  const isDraft = $('draftResult').innerHTML.includes(id);
+  let overrides = {};
+  const raw = ($('ovr_' + id) || {}).value;
+  if (raw && raw.trim()) { try { overrides = JSON.parse(raw); } catch { alert('覆盖项不是合法 JSON'); return; } }
+  // 活动任务候选的确认按 Run 批量（CRM 端点 /ai/runs/{runId}/confirm），由 Run 维度处理：
+  const c = STATE.lastCandidate || {};
+  const target = isDraft ? `/ai/candidates/${id}/confirm-draft` : `/ai/runs/${c.runId || id}/confirm`;
+  const r = await api('POST', target, isDraft ? overrides : { items: [Object.assign({ item_id: id }, overrides)] });
+  if (!r.ok) { log('draftLog', '确认失败 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 160)); return; }
+  const results = r.body.results || [r.body];
+  const first = results[0] || {};
+  log('draftLog', '确认返回：' + JSON.stringify(first).slice(0, 220));
+  renderCandidate(Object.assign({}, first, { id: first.id || id }));
+  switchView($('viewChips').querySelector('.active'));
+}
+
+async function ignoreCand(id) {
+  const r = await api('POST', `/ai/candidates/${id}/ignore`);
+  log('draftLog', '忽略 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 120));
+  switchView($('viewChips').querySelector('.active'));
+}
+
+async function retryRun(runId) {
+  const r = await api('POST', `/ai/runs/${runId}/retry`);
+  log('draftLog', '重试 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 140));
+}
+
+// ---------- 候选三视图 ----------
+
+function switchView(el) {
+  document.querySelectorAll('#viewChips .chip').forEach(c => c.classList.toggle('active', c === el));
+  STATE.viewStatus = el.dataset.status || '';
+  loadCandidates();
+}
+
+async function loadCandidates() {
+  const q = STATE.viewStatus ? `?status=${STATE.viewStatus}` : '';
+  const r = await api('GET', '/ai/candidates' + q);
+  if (!Array.isArray(r.body)) { $('candList').textContent = JSON.stringify(r.body).slice(0, 140); return; }
+  if (!r.body.length) { $('candList').textContent = '（空）'; return; }
+  $('candList').innerHTML = r.body.map(c => `
+    <div class="card">
+      <b>${c.title || c.candidate_type}</b> ${pill(c.candidate_type, 'run')} ${statusPill(c.status, c.write_status)}
+      <div class="meta">${c.id} · 匹配 ${c.match_status}${c.write_error ? ' · ' + c.write_error : ''}
+      ${c.formal_activity_id || c.formal_task_id ? ' · 正式 ' + (c.formal_activity_id || c.formal_task_id) : ''}</div>
+      ${c.status === 'PENDING_CONFIRM' ? `<button class="mini" onclick="confirmFromList('${c.id}', '${c.run_id || ''}', ${c.candidate_type === 'CUSTOMER' || c.candidate_type === 'CONTACT' || c.candidate_type === 'LEAD' || c.candidate_type === 'OPPORTUNITY'})">确认</button>
+      <button class="mini ghost" onclick="ignoreCand('${c.id}')">忽略</button>` : ''}
+    </div>`).join('');
+}
+
+async function confirmFromList(id, runId, isDraft) {
+  const target = isDraft
+    ? `/ai/candidates/${id}/confirm-draft`
+    : `/ai/runs/${runId}/confirm`;
+  const body = isDraft ? {} : { items: [{ item_id: id }] };
+  const r = await api('POST', target, body);
+  log('draftLog', '确认 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 180));
+  loadCandidates();
+}
+
+// 还原记住的连接
+window.addEventListener('load', () => {
+  const base = localStorage.getItem('ry-h5-base');
+  const tk = localStorage.getItem('ry-h5-token');
+  if (base) $('baseUrl').value = base;
+  if (tk) $('token').value = tk;
+});
+</script>
+</body>
+</html>
