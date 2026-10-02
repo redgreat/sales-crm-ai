@@ -350,3 +350,28 @@ async def test_message_activity_refreshes_conversation_ttl(db_pool):
     assert expired == 0
     refreshed = await conversations_repo.get_conversation(db_pool, conversation_id)
     assert refreshed["status"] == "active"
+
+
+async def test_message_resume_with_wrong_state_version_rejected(dev_api):
+    """消息恢复入口的版本守卫（P3）：携带错误 state_version 被拒，正确版本恢复成功。"""
+    client, settings = dev_api
+    conversation_id = await _new_conversation(client, settings)
+    msg1 = await _post(client, settings, f"/api/v1/conversations/{conversation_id}/messages",
+                       {"text": MISSING_TEXT, "idempotency_key": f"sv-{uuid.uuid4().hex}"})
+    run_id = msg1.json()["run_id"]
+    await _wait_status(client, settings, run_id, {"waiting_input"})
+    pending = await _get(client, settings, f"/api/v1/conversations/{conversation_id}/pending")
+    version = pending.json()["state_version"]
+
+    # 错误版本 → 409，等待状态保持
+    bad = await _post(client, settings, f"/api/v1/conversations/{conversation_id}/messages",
+                      {"text": "日期：2026-10-06", "state_version": version + 5})
+    assert bad.status_code == 409
+    still = await _get(client, settings, f"/api/v1/conversations/{conversation_id}/pending")
+    assert still.json()["waiting"] is True
+
+    # 正确版本 → 恢复成功
+    good = await _post(client, settings, f"/api/v1/conversations/{conversation_id}/messages",
+                       {"text": "日期：2026-10-06", "state_version": version})
+    assert good.status_code == 202 and good.json()["mode"] == "resume"
+    await _wait_status(client, settings, run_id, {"succeeded"})

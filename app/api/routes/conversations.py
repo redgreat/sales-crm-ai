@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import require_operator
 from app.auth import OperatorContext
-from app.errors import Forbidden, NotFound, ValidationFailed
+from app.errors import Forbidden, NotFound, StateVersionConflict, ValidationFailed
 from app.graphs.builder import graph_registry_version
 from app.graphs.interrupts import get_pending_interrupt
 from app.persistence import conversations as conversations_repo
@@ -31,6 +31,9 @@ class CreateConversationBody(BaseModel):
 class MessageBody(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
     idempotency_key: str | None = Field(default=None, max_length=200)
+    # 可选：补参应答携带的等待状态版本（与 /runs/{id}/resume 同一守卫语义）。
+    # 对话式补参（直接发消息）可以不带——带则严格校验，防旧页面恢复新等待（P3 多入口一致性）。
+    state_version: int | None = Field(default=None, ge=0)
 
 
 def _conv_id(value: str) -> UUID:
@@ -140,6 +143,17 @@ async def post_message(
         request.app.state.pool, conversation_id=conversation_id, status="waiting_input"
     )
     if waiting is not None:
+        # 恢复入口版本守卫（P3）：客户端随消息携带 state_version 时严格校验——
+        # 与 /runs/{id}/resume 同一语义（防双标签页/旧页面恢复新等待）；不携带则视为对话式补参。
+        if body.state_version is not None:
+            graph = request.app.state.graphs.get(waiting["capability"])
+            payload = await get_pending_interrupt(graph, waiting["thread_id"]) if graph else None
+            expected = int((payload or {}).get("state_version", -1))
+            if body.state_version != expected:
+                raise StateVersionConflict(
+                    "状态版本不匹配（可能来自旧页面或并发会话）",
+                    details={"expected": expected, "received": body.state_version},
+                )
         # 会话在等待补参：本条消息作为恢复应答（等待 Run 独立幂等键，恢复队列化）
         accepted = await runs_repo.queue_resume(
             request.app.state.pool,

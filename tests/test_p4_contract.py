@@ -1,6 +1,6 @@
 """P4 双端集成契约测试（不依赖真实 CRM 运行）。
 
-冻结契约（2026-10-01，见 docs/P4-双端集成契约.md）：
+冻结契约（2026-10-01，已归并至 docs/AI接入需求文档.md 第 13 节）：
 - 方法/路径：GET {base_url}/ai/integration/facts/{subject_type}/{subject_id}
   Java 端点：AiIntegrationController#objectFacts（/api/v1/salescrm/ai/integration/facts/**）
 - 签名：SAI-HMAC-SHA256（app/auth.py 与 CRM AiHmacSigner 逐字段一致，path 不含 query）
