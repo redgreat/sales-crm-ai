@@ -199,7 +199,7 @@ async def test_draft_discard_leaves_no_business_write(dev_api):
     client, settings = dev_api
     created = await _post(client, settings, "/api/v1/runs", {
         "capability": "customer.draft",
-        "input": {"text": "新增客户：测试丢弃公司，客户类型：ORG"},
+        "input": {"text": "新增客户：测试丢弃公司，客户类型：ORG，经营区域：华东，业务线：车电业务线"},
     })
     run_id = created.json()["run_id"]
     final = await _wait_status(client, settings, run_id, {"succeeded"})

@@ -204,6 +204,40 @@ async def test_same_client_key_replays_run_without_duplicate_message(dev_api):
     assert len(user_msgs) == 1
 
 
+async def test_concurrent_same_key_messages_create_one_run(dev_api):
+    """模拟弱网重复点击：两个请求同时进入，只有一条 Run/用户消息。"""
+    client, settings = dev_api
+    conversation_id = await _new_conversation(client, settings)
+    path = f"/api/v1/conversations/{conversation_id}/messages"
+    key = f"concurrent-{uuid.uuid4().hex}"
+    payload = {"text": "记录：今天联系 ACME 客户", "idempotency_key": key}
+    responses = await asyncio.gather(
+        _post(client, settings, path, payload),
+        _post(client, settings, path, payload),
+    )
+    assert [response.status_code for response in responses] == [202, 202]
+    ids = [response.json()["run_id"] for response in responses]
+    assert ids[0] == ids[1]
+    messages = await _get(client, settings, path)
+    user_messages = [item for item in messages.json()["messages"] if item["role"] == "user"]
+    assert len(user_messages) == 1
+    assert user_messages[0]["run_id"] == ids[0]
+
+
+async def test_message_key_reuse_with_changed_text_returns_conflict(dev_api):
+    client, settings = dev_api
+    conversation_id = await _new_conversation(client, settings)
+    key = f"changed-{uuid.uuid4().hex}"
+    path = f"/api/v1/conversations/{conversation_id}/messages"
+    first = await _post(client, settings, path, {"text": "客户A询价", "idempotency_key": key})
+    changed = await _post(client, settings, path, {"text": "客户B签约", "idempotency_key": key})
+    assert first.status_code == 202
+    assert changed.status_code == 409
+    messages = await _get(client, settings, path)
+    user_msgs = [m for m in messages.json()["messages"] if m["role"] == "user"]
+    assert [m["content"] for m in user_msgs] == ["客户A询价"]
+
+
 async def test_resume_answer_not_duplicated_on_retry(dev_api):
     """补参应答重试：恢复已完成时重试同 key 幂等返回原 Run，应答消息不双插。"""
     client, settings = dev_api
@@ -334,6 +368,110 @@ async def test_expired_conversation_rejected_at_api(dev_api):
     assert reject_run.status_code == 422
 
 
+async def test_message_does_not_create_run_after_concurrent_close(dev_api, monkeypatch):
+    from app.api.routes import conversations as route
+
+    client, settings = dev_api
+    conversation_id = await _new_conversation(client, settings)
+    checked = asyncio.Event()
+    proceed = asyncio.Event()
+    original = route._require_owned_conversation
+
+    async def pause_after_check(request, checked_id, operator):
+        result = await original(request, checked_id, operator)
+        if checked_id == conversation_id:
+            checked.set()
+            await proceed.wait()
+        return result
+
+    monkeypatch.setattr(route, "_require_owned_conversation", pause_after_check)
+    path = f"/api/v1/conversations/{conversation_id}/messages"
+    pending = asyncio.create_task(_post(client, settings, path, {"text": "关闭后不应新建 Run"}))
+    await asyncio.wait_for(checked.wait(), timeout=5)
+    async with open_pool(settings) as pool:
+        assert await conversations_repo.close_conversation(pool, conversation_id)
+    proceed.set()
+    response = await pending
+    assert response.status_code == 422
+    async with open_pool(settings) as pool:
+        assert await runs_repo.find_latest_run_by_status(
+            pool, conversation_id=conversation_id, status="queued"
+        ) is None
+
+
+async def test_resume_reports_closed_conversation_after_precheck(dev_api, monkeypatch):
+    from app.api.routes import runs as route
+
+    client, settings = dev_api
+    conversation_id = await _new_conversation(client, settings)
+    message = await _post(client, settings, f"/api/v1/conversations/{conversation_id}/messages", {"text": MISSING_TEXT})
+    run_id = message.json()["run_id"]
+    await _wait_status(client, settings, run_id, {"waiting_input"})
+    pending = await _get(client, settings, f"/api/v1/runs/{run_id}/pending")
+    version = pending.json()["state_version"]
+    checked = asyncio.Event()
+    proceed = asyncio.Event()
+    original = route.get_pending_interrupt
+
+    async def pause_after_checkpoint(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        checked.set()
+        await proceed.wait()
+        return result
+
+    monkeypatch.setattr(route, "get_pending_interrupt", pause_after_checkpoint)
+    request = asyncio.create_task(_post(client, settings, f"/api/v1/runs/{run_id}/resume", {
+        "values": {"text": "日期：2026-10-08"}, "state_version": version,
+    }))
+    await asyncio.wait_for(checked.wait(), timeout=5)
+    async with open_pool(settings) as pool:
+        assert await conversations_repo.close_conversation(pool, conversation_id)
+    proceed.set()
+    response = await request
+    assert response.status_code == 422
+    assert "会话" in response.json()["error"]["message"]
+    async with open_pool(settings) as pool:
+        assert (await runs_repo.get_run(pool, run_id))["status"] == "waiting_input"
+
+
+async def test_message_answer_reports_closed_conversation_after_version_check(dev_api, monkeypatch):
+    from app.api.routes import conversations as route
+
+    client, settings = dev_api
+    conversation_id = await _new_conversation(client, settings)
+    path = f"/api/v1/conversations/{conversation_id}/messages"
+    message = await _post(client, settings, path, {"text": MISSING_TEXT})
+    run_id = message.json()["run_id"]
+    await _wait_status(client, settings, run_id, {"waiting_input"})
+    pending = await _get(client, settings, f"/api/v1/conversations/{conversation_id}/pending")
+    version = pending.json()["state_version"]
+    checked = asyncio.Event()
+    proceed = asyncio.Event()
+    original = route.get_pending_interrupt
+
+    async def pause_after_checkpoint(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        checked.set()
+        await proceed.wait()
+        return result
+
+    monkeypatch.setattr(route, "get_pending_interrupt", pause_after_checkpoint)
+    request = asyncio.create_task(_post(client, settings, path, {
+        "text": "日期：2026-10-08", "state_version": version,
+    }))
+    await asyncio.wait_for(checked.wait(), timeout=5)
+    async with open_pool(settings) as pool:
+        assert await conversations_repo.close_conversation(pool, conversation_id)
+    proceed.set()
+    response = await request
+    assert response.status_code == 422
+    async with open_pool(settings) as pool:
+        assert (await runs_repo.get_run(pool, run_id))["status"] == "waiting_input"
+        assert await runs_repo.find_latest_run_by_status(
+            pool, conversation_id=conversation_id, status="queued"
+        ) is None
+
+
 async def test_message_activity_refreshes_conversation_ttl(db_pool):
     """消息活动刷新会话 updated_at：持续对话的会话不会被 TTL 误杀。"""
     conv = await conversations_repo.create_conversation(db_pool, crm_user_id="u1")
@@ -375,3 +513,114 @@ async def test_message_resume_with_wrong_state_version_rejected(dev_api):
                        {"text": "日期：2026-10-06", "state_version": version})
     assert good.status_code == 202 and good.json()["mode"] == "resume"
     await _wait_status(client, settings, run_id, {"succeeded"})
+
+
+async def test_concurrent_resume_loser_does_not_create_new_run(dev_api, monkeypatch):
+    """等待已被并发恢复时返回冲突，不能把补参误建成新的提炼 Run。"""
+    client, settings = dev_api
+    conversation_id = await _new_conversation(client, settings)
+    msg = await _post(
+        client,
+        settings,
+        f"/api/v1/conversations/{conversation_id}/messages",
+        {"text": MISSING_TEXT, "idempotency_key": f"race-{uuid.uuid4().hex}"},
+    )
+    run_id = msg.json()["run_id"]
+    await _wait_status(client, settings, run_id, {"waiting_input"})
+
+    async def lose_resume(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(runs_repo, "queue_resume", lose_resume)
+    response = await _post(
+        client,
+        settings,
+        f"/api/v1/conversations/{conversation_id}/messages",
+        {"text": "日期：2026-10-06"},
+    )
+    assert response.status_code == 409
+
+    listed = await _get(
+        client,
+        settings,
+        "/api/v1/runs",
+        url=f"/api/v1/runs?conversation_id={conversation_id}",
+    )
+    assert [item["run_id"] for item in listed.json()["runs"]] == [run_id]
+
+
+async def test_new_message_rejected_while_resume_is_queued(db_url: str):
+    """补参已入队但未执行时，后到消息不能再建同线程 Run。"""
+    settings = _dev_settings(db_url)
+    settings.worker.enabled = False
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://ai") as client:
+            conversation_id = await _new_conversation(client, settings)
+            path = f"/api/v1/conversations/{conversation_id}/messages"
+            created = await _post(client, settings, path, {
+                "text": MISSING_TEXT, "idempotency_key": f"initial-{uuid.uuid4().hex}",
+            })
+            run_id = created.json()["run_id"]
+            assert await app.state.executor.run_batch() == 1
+            assert (await _get(client, settings, f"/api/v1/runs/{run_id}")).json()["status"] == "waiting_input"
+
+            first_answer = await _post(client, settings, path, {
+                "text": "日期：2026-10-08", "idempotency_key": f"answer-{uuid.uuid4().hex}",
+            })
+            assert first_answer.status_code == 202
+            assert first_answer.json()["mode"] == "resume"
+            late_answer = await _post(client, settings, path, {
+                "text": "日期：2026-10-09", "idempotency_key": f"late-{uuid.uuid4().hex}",
+            })
+            assert late_answer.status_code == 409
+
+            listed = await _get(
+                client, settings, "/api/v1/runs",
+                url=f"/api/v1/runs?conversation_id={conversation_id}",
+            )
+            assert [item["run_id"] for item in listed.json()["runs"]] == [run_id]
+
+
+async def test_resume_queued_between_guard_and_run_creation(db_url: str, monkeypatch):
+    """前置检查后补参入队，仓库创建仍不能抢同一个 checkpoint 线程。"""
+    settings = _dev_settings(db_url)
+    settings.worker.enabled = False
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://ai") as client:
+            conversation_id = await _new_conversation(client, settings)
+            path = f"/api/v1/conversations/{conversation_id}/messages"
+            created = await _post(client, settings, path, {"text": MISSING_TEXT})
+            run_id = created.json()["run_id"]
+            assert await app.state.executor.run_batch() == 1
+            assert (await _get(client, settings, f"/api/v1/runs/{run_id}")).json()["status"] == "waiting_input"
+
+            original = runs_repo.find_active_resume
+            original_waiting = runs_repo.find_latest_run_by_status
+            checked = asyncio.Event()
+            proceed = asyncio.Event()
+
+            async def miss_waiting(*args, **kwargs):
+                if kwargs.get("status") == "waiting_input":
+                    return None
+                return await original_waiting(*args, **kwargs)
+
+            async def pause_after_guard(*args, **kwargs):
+                result = await original(*args, **kwargs)
+                checked.set()
+                await proceed.wait()
+                return result
+
+            monkeypatch.setattr(runs_repo, "find_latest_run_by_status", miss_waiting)
+            monkeypatch.setattr(runs_repo, "find_active_resume", pause_after_guard)
+            pending = asyncio.create_task(_post(client, settings, path, {"text": "另一条消息"}))
+            await asyncio.wait_for(checked.wait(), timeout=5)
+            assert await runs_repo.queue_resume(app.state.pool, run_id=run_id, values={"text": "日期：2026-10-08"})
+            proceed.set()
+            response = await pending
+            assert response.status_code == 409
+            listed = await _get(client, settings, "/api/v1/runs", url=f"/api/v1/runs?conversation_id={conversation_id}")
+            assert [item["run_id"] for item in listed.json()["runs"]] == [run_id]

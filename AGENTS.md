@@ -2,6 +2,23 @@
 
 本项目采用 Python，以 AgentZR 为模板选择性重建 CRM AI 服务。先完整阅读 [需求](docs/AI接入需求文档.md) 和 [实施计划](docs/AI接入实施计划.md)，它们是新实施基线，旧 CRM Java AI 方案不再作为技术架构依据。
 
+## 开发规范（写代码前必读，属强制约束）
+
+| 规范 | 路径 | 何时读 |
+|---|---|---|
+| 前后端开发规范 | [docs/前后端开发规范.md](docs/前后端开发规范.md) | 动 Python 后端（§2）或前端（§3）代码前 |
+| PostgreSQL 数据库规范 | [docs/PostgreSQL数据库规范.md](docs/PostgreSQL数据库规范.md) | 涉及 CRM 主库表/字段口径、写 SQL、对接 CRM 数据前 |
+| 测试规范 | [docs/测试规范.md](docs/测试规范.md) | 联调、跑真实链路、用测试账号前 |
+
+要点（详见各文件，不得绕开）：
+
+- **分层单向依赖**：`app/api` → `app/runtime` → `app/graphs` → `app/integrations|knowledge|providers`，`app/persistence` 为底座；路由层不写业务逻辑与 SQL。
+- **错误与配置**：业务错误只抛 `app/errors.py` 的 `ApiError` 子类；配置唯一入口 `app/config.py::Settings`，新增项同步 `conf/config.yml.example`。
+- **密钥与用量**：密钥不入库不入日志；模型 usage/费用/配额不落日志、消息、checkpoint。
+- **数据库**：AI 自有库 `zrcrm_ai` 变更走 `app/persistence/migrations/` 显式应用；**禁止直连 CRM 主库 `zrcrm`**，其表口径以 `docs/PostgreSQL数据库规范.md` 为准。
+- **前端分工**：本仓 `frontend/` 是 SvelteKit 联调页（生产默认关闭、不持密钥）；正式业务前端是 `sales-crm-admin-ui` 的 Vue 2 + element-ui，不得引入 Vue 3 门户。
+- **提交前**过 `docs/前后端开发规范.md` §5 清单；§6 为红线，一律禁止。
+
 ## 实施规则
 
 - 先检查当前分支、git status 和已有实现，保留用户/其他 Agent 的改动；文档当前是计划，不代表功能已实现。

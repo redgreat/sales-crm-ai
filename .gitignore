@@ -236,3 +236,6 @@ frontend/build/
 # ---- local dev/test scripts (may contain secrets/tokens, e.g. get_crm_token.py) ----
 scripts/*
 !scripts/crm_facts_live_check.py
+# h5_server.py 不含任何密钥（凭据走环境变量 / .local/identity.json），可入库
+!scripts/h5_server.py
+.archify/

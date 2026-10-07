@@ -28,6 +28,9 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "realpg: 需要真实 PostgreSQL 的测试（conftest 自动起临时实例，缺依赖时显式 skip）",
+    "contract: 双端接口契约测试",
+    "draftlive: 依赖真实 CRM 环境的建档联调测试",
+    "crmlive: 显式授权后运行的真实 CRM 写入联调测试",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

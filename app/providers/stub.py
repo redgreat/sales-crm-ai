@@ -183,7 +183,9 @@ class StubChatModel(BaseChatModel):
             prompt = str(prompt)
         match = _USER_TEXT_RE.search(prompt)
         user_text = match.group(1) if match else prompt
-        if "<<OUTPUT_CONTRACT>>draft<<END_OUTPUT_CONTRACT>>" in prompt:
+        if "<<OUTPUT_CONTRACT>>enhanced_text<<END_OUTPUT_CONTRACT>>" in prompt:
+            payload = {"optimized_text": user_text.strip()}
+        elif "<<OUTPUT_CONTRACT>>draft<<END_OUTPUT_CONTRACT>>" in prompt:
             payload = parse_draft_text(user_text)
         elif _ANALYSIS_CONTRACT_RE.search(prompt):
             payload = parse_facts_text(user_text)

@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import require_operator
 from app.auth import OperatorContext
-from app.errors import Forbidden, NotFound, StateVersionConflict, ValidationFailed
+from app.errors import Conflict, Forbidden, NotFound, StateVersionConflict, ValidationFailed
 from app.graphs.builder import graph_registry_version
 from app.graphs.interrupts import get_pending_interrupt
 from app.persistence import conversations as conversations_repo
@@ -130,6 +130,8 @@ async def post_message(
             request.app.state.pool, conversation_id, client_key
         )
         if seen is not None and seen.get("run_id"):
+            if seen["content"] != body.text:
+                raise Conflict("幂等键已用于不同消息")
             run = await runs_repo.get_run(request.app.state.pool, str(seen["run_id"]))
             if run is not None:
                 return {
@@ -170,24 +172,51 @@ async def post_message(
                 client_key=client_key,
             )
             return {"mode": "resume", "run_id": str(waiting["run_id"]), "status": "queued"}
-        # 恢复请求刚被并发处理：落库后按新消息走（下方新建 Run）
+        # 恢复请求刚被并发处理：本条消息仍是对旧等待的应答，不能误当成新意图建 Run。
+        latest = await conversations_repo.get_conversation(request.app.state.pool, conversation_id)
+        if latest is not None and latest["status"] != "active":
+            raise ValidationFailed("会话已结束，不能继续发送消息")
+        current = await runs_repo.get_run(request.app.state.pool, str(waiting["run_id"]))
+        raise StateVersionConflict(
+            "等待状态已被其他请求恢复，请刷新后重试",
+            details={
+                "run_id": str(waiting["run_id"]),
+                "status": (current or {}).get("status", "unknown"),
+            },
+        )
+
+    active_resume = await runs_repo.find_active_resume(
+        request.app.state.pool, conversation_id=conversation_id
+    )
+    if active_resume is not None:
+        raise StateVersionConflict(
+            "补参正在处理，请等待当前 Run 完成后重试",
+            details={"run_id": str(active_resume["run_id"]), "status": active_resume["status"]},
+        )
 
     settings = request.app.state.settings
     # 每轮消息独立 Run：客户端提供幂等键用客户端的（同 key 重试幂等重放）；
     # 未提供则一次性键——绝不能用固定会话键，否则第二条消息会重放第一个 Run。
     idempotency_key = client_key or f"msg:{conversation_id}:auto:{uuid.uuid4().hex}"
-    run, created = await runs_repo.create_run(
-        request.app.state.pool,
-        idempotency_key=idempotency_key,
-        capability="communication.extract",
-        input_payload={"text": body.text},
-        operator={"user_id": operator.user_id, "user_name": operator.user_name},
-        thread_id=conversation["thread_id"],
-        conversation_id=conversation_id,
-        graph_version=graph_registry_version()["communication.extract"],
-        prompt_version="extract-prompt@1",
-        max_attempts=settings.worker.max_attempts,
-    )
+    try:
+        run, created = await runs_repo.create_run(
+            request.app.state.pool,
+            idempotency_key=idempotency_key,
+            capability="communication.extract",
+            input_payload={"text": body.text},
+            operator={"user_id": operator.user_id, "user_name": operator.user_name},
+            thread_id=conversation["thread_id"],
+            conversation_id=conversation_id,
+            graph_version=graph_registry_version()["communication.extract"],
+            prompt_version="extract-prompt@1",
+            max_attempts=settings.worker.max_attempts,
+        )
+    except runs_repo.IdempotencyKeyConflict as exc:
+        raise Conflict(str(exc)) from exc
+    except runs_repo.ConversationInactive as exc:
+        raise ValidationFailed(str(exc)) from exc
+    except runs_repo.ResumeInProgress as exc:
+        raise StateVersionConflict(str(exc)) from exc
     await conversations_repo.append_message(
         request.app.state.pool,
         conversation_id=conversation_id,

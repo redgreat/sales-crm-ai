@@ -146,3 +146,40 @@ async def test_conversation_run_appends_assistant_message(db_pool, graphs):
 
     meta_text = json.dumps(assistant[0]["meta"], ensure_ascii=False).lower()
     assert "usage" not in meta_text and "token" not in meta_text
+
+
+async def test_long_running_graph_renews_lease(db_pool, monkeypatch):
+    """图执行超过单次租约时应续租，避免被另一 worker 回收并重复执行。"""
+    renewals = 0
+    original_renew = runs_repo.renew_lease
+
+    async def counted_renew(*args, **kwargs):
+        nonlocal renewals
+        renewals += 1
+        return await original_renew(*args, **kwargs)
+
+    monkeypatch.setattr(runs_repo, "renew_lease", counted_renew)
+    run, _ = await runs_repo.create_run(db_pool, **_input_kwargs())
+    claimed = (
+        await runs_repo.claim_next_runs(
+            db_pool, worker_id="slow-worker", limit=1, lease_seconds=1
+        )
+    )[0]
+
+    class SlowGraph:
+        async def ainvoke(self, invoke_input, config):
+            await asyncio.sleep(1.2)
+            return {"result": {"candidates": {"activities": [], "tasks": []}}}
+
+        async def aget_state(self, config):
+            return type("State", (), {"next": ()})()
+
+    executor = Executor(
+        db_pool,
+        {"communication.extract": SlowGraph()},
+        lease_seconds=1,
+        backoff_base_seconds=0.1,
+    )
+    await executor._execute_claimed(claimed)
+    assert renewals >= 2
+    assert (await runs_repo.get_run(db_pool, run["run_id"]))["status"] == "succeeded"

@@ -38,6 +38,15 @@ async def test_create_run_idempotent(db_pool):
     assert run1["status"] == "queued"
 
 
+async def test_create_run_rejects_reused_key_with_different_input(db_pool):
+    kwargs = _make_run_kwargs()
+    await runs_repo.create_run(db_pool, **kwargs)
+    with pytest.raises(runs_repo.IdempotencyKeyConflict):
+        await runs_repo.create_run(
+            db_pool, **{**kwargs, "input_payload": {"text": "另一条任务"}}
+        )
+
+
 async def test_claim_is_exclusive_between_workers(db_pool):
     ids = []
     for _ in range(3):
@@ -83,6 +92,24 @@ async def test_stale_worker_cannot_complete(db_pool):
     assert final["result"] == {"x": "fresh"}
 
 
+async def test_expired_lease_at_attempt_limit_fails_instead_of_requeueing(db_pool):
+    run, _ = await runs_repo.create_run(db_pool, **_make_run_kwargs(max_attempts=1))
+    claimed = (await runs_repo.claim_next_runs(db_pool, worker_id="crashed", limit=1, lease_seconds=60))[0]
+    async with db_pool.connection() as conn:
+        await conn.execute(
+            "UPDATE ai_runs SET lease_expires_at = now() - interval '1s' WHERE run_id = %s",
+            (run["run_id"],),
+        )
+    assert await runs_repo.requeue_expired_leases(db_pool) == []
+    final = await runs_repo.get_run(db_pool, run["run_id"])
+    assert final["status"] == "failed"
+    assert final["attempt_count"] == claimed["attempt_count"] == 1
+    assert final["error"]["code"] == "LEASE_EXPIRED_ATTEMPTS_EXHAUSTED"
+    assert final["status_history"][-1]["status"] == "failed"
+    assert final["finished_at"] is not None
+    assert not await runs_repo.claim_next_runs(db_pool, worker_id="next", limit=1, lease_seconds=60)
+
+
 async def test_retry_then_exhaust(db_pool):
     run, _ = await runs_repo.create_run(db_pool, **_make_run_kwargs(max_attempts=2))
     run_id = run["run_id"]
@@ -106,6 +133,19 @@ async def test_retry_then_exhaust(db_pool):
     final = await runs_repo.get_run(db_pool, run_id)
     assert final["status"] == "failed"
     assert final["error"]["message"] == "boom again"
+    assert final["status_history"][-1]["status"] == "failed"
+
+
+async def test_retry_history_records_queued_not_terminal_failure(db_pool):
+    run, _ = await runs_repo.create_run(db_pool, **_make_run_kwargs(max_attempts=2))
+    claimed = (await runs_repo.claim_next_runs(db_pool, worker_id="w", limit=1, lease_seconds=60))[0]
+    outcome = await runs_repo.fail_run(
+        db_pool, run_id=run["run_id"], generation=claimed["execution_generation"],
+        error={"code": "TRANSIENT"}, backoff_seconds=60,
+    )
+    assert outcome == "queued"
+    current = await runs_repo.get_run(db_pool, run["run_id"])
+    assert current["status_history"][-1]["status"] == "queued"
 
 
 async def test_failed_run_backoff_delays_requeue(db_pool):

@@ -26,11 +26,12 @@ from app.api.routes import (
 from app.config import Settings, get_settings
 from app.errors import ApiError
 from app.graphs.builder import compile_graph_for, graph_registry_version
+from app.integrations.crm import build_crm_client
 from app.persistence.checkpoints import CheckpointSchemaNotReady, check_checkpoint_schema, open_postgres_saver
 from app.persistence.migrations import check_schema_revision
 from app.persistence.pool import open_pool
 from app.providers.factory import build_chat_model
-from app.runtime.executor import Executor, run_worker_loop
+from app.runtime.executor import Executor, run_worker_loop, stop_workers
 
 logger = logging.getLogger("sales-crm-ai")
 
@@ -79,6 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             model = build_chat_model(settings)  # prod + stub 在此直接失败
             app.state.model = model
+            crm_client = build_crm_client(settings)
 
             graphs: dict[str, Any] = {}
             app.state.graphs = graphs
@@ -101,6 +103,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         backoff_base_seconds=settings.worker.backoff_base_seconds,
                         batch_size=1,
                         conversations_ttl_hours=settings.conversations.ttl_hours,
+                        settings=settings,
+                        crm_client=crm_client,
+                        model=model,
                     )
                     stop_event = asyncio.Event()
                     app.state.stop_event = stop_event
@@ -122,11 +127,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     try:
                         yield
                     finally:
-                        stop_event.set()
-                        if workers:
-                            await asyncio.gather(*workers, return_exceptions=True)
+                        await stop_workers(
+                            workers,
+                            stop_event,
+                            timeout_seconds=settings.worker.shutdown_grace_seconds,
+                        )
+                        if crm_client is not None and hasattr(crm_client, "aclose"):
+                            await crm_client.aclose()
             else:
-                yield
+                try:
+                    yield
+                finally:
+                    if crm_client is not None and hasattr(crm_client, "aclose"):
+                        await crm_client.aclose()
 
     app = FastAPI(title="sales-crm-ai", version="0.1.0", lifespan=lifespan)
     _install_error_handlers(app)

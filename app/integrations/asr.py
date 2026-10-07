@@ -21,7 +21,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -34,6 +36,7 @@ _STATUS_SUCCEEDED = "SUCCEEDED"
 _STATUS_FAILED = "FAILED"
 _STATUS_PENDING = "PENDING"
 _STATUS_RUNNING = "RUNNING"
+_MAX_RESULT_BYTES = 8 * 1024 * 1024
 
 
 class AsrError(RuntimeError):
@@ -80,6 +83,10 @@ class Transcript:
 class AsrClient(Protocol):
     async def transcribe(self, *, audio_url: str) -> Transcript: ...
 
+    async def submit(self, *, audio_url: str) -> str: ...
+
+    async def poll(self, *, task_id: str, source_url: str) -> Transcript: ...
+
 
 class DashScopeAsrClient:
     """百炼非实时语音识别客户端（httpx 直调，不引入供应商 SDK）。"""
@@ -98,11 +105,19 @@ class DashScopeAsrClient:
         return headers
 
     async def transcribe(self, *, audio_url: str) -> Transcript:
+        task_id = await self.submit(audio_url=audio_url)
+        return await self.poll(task_id=task_id, source_url=audio_url)
+
+    async def submit(self, *, audio_url: str) -> str:
         if not str(audio_url or "").strip():
             raise AsrError("audio_url 不能为空（百炼只接受公网可访问 URL）")
-        task_id = await self._submit(audio_url)
+        return await self._submit(audio_url)
+
+    async def poll(self, *, task_id: str, source_url: str) -> Transcript:
+        if not str(task_id or "").strip():
+            raise AsrError("task_id 不能为空")
         payload = await self._wait_for_result(task_id)
-        return self._parse(payload, source_url=audio_url)
+        return self._parse(payload, source_url=source_url)
 
     async def _submit(self, audio_url: str) -> str:
         url = f"{self._settings.endpoint()}/api/v1/services/audio/asr/transcription"
@@ -151,10 +166,33 @@ class DashScopeAsrClient:
                 break
         if not transcription_url:
             raise AsrError("任务成功但未返回 transcription_url（结果链接缺失）")
-        response = await self._client.get(transcription_url)
-        if response.status_code >= 400:
-            raise AsrError(f"下载识别结果失败: HTTP {response.status_code}")
-        payload = response.json() or {}
+        parsed = urlsplit(transcription_url)
+        host = (parsed.hostname or "").lower()
+        try:
+            allowed = (parsed.scheme == "https" and host.endswith(".aliyuncs.com")
+                       and parsed.username is None and parsed.password is None
+                       and parsed.port in (None, 443))
+        except ValueError:
+            allowed = False
+        if not allowed:
+            raise AsrError("识别结果链接不在允许的 HTTPS 域名范围内")
+        async with self._client.stream("GET", transcription_url, follow_redirects=False) as response:
+            if 300 <= response.status_code < 400:
+                raise AsrError("识别结果下载不允许重定向")
+            if response.status_code >= 400:
+                raise AsrError(f"下载识别结果失败: HTTP {response.status_code}")
+            declared_size = response.headers.get("content-length")
+            if declared_size and declared_size.isdigit() and int(declared_size) > _MAX_RESULT_BYTES:
+                raise AsrError("识别结果超过下载大小上限")
+            chunks = bytearray()
+            async for chunk in response.aiter_bytes():
+                chunks.extend(chunk)
+                if len(chunks) > _MAX_RESULT_BYTES:
+                    raise AsrError("识别结果超过下载大小上限")
+        try:
+            payload = json.loads(chunks) or {}
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise AsrError("识别结果不是合法 JSON") from exc
         return strip_usage_metadata(payload)
 
     @staticmethod

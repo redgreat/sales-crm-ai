@@ -2,7 +2,7 @@
 
 前置：
   1. AI 服务与 CRM 服务运行（本测试走 CRM 代理链：/ai/runs、/ai/runs/{id}/import-draft）
-  2. CRM JWT：SAI_CRM_TOKEN 或 .local/crm-token.txt（候选链路走用户身份，谁发起谁确认）
+  2. 显式 SAI_RUN_CRM_LIVE=1；CRM JWT：SAI_CRM_TOKEN 或 .local/crm-token.txt
 
 用法:
   pytest tests/test_p4_draft_live.py -q -m draftlive
@@ -23,12 +23,16 @@ import pytest_asyncio
 pytestmark = [pytest.mark.realpg, pytest.mark.draftlive]
 
 CRM_BASE_URL = os.environ.get("SAI_CRM_BASE_URL", "http://127.0.0.1:18080/api/v1/salescrm")
-CRM_TOKEN = os.environ.get("SAI_CRM_TOKEN", "") or (
+CRM_LIVE_ENABLED = os.environ.get("SAI_RUN_CRM_LIVE") == "1"
+CRM_TOKEN = (os.environ.get("SAI_CRM_TOKEN", "") or (
     (Path(__file__).resolve().parent.parent / ".local" / "crm-token.txt").read_text(encoding="utf-8").strip()
     if (Path(__file__).resolve().parent.parent / ".local" / "crm-token.txt").exists() else ""
-)
+)) if CRM_LIVE_ENABLED else ""
 
-requires_token = pytest.mark.skipif(not CRM_TOKEN, reason="需要 CRM JWT（SAI_CRM_TOKEN 或 .local/crm-token.txt）")
+requires_token = pytest.mark.skipif(
+    not CRM_LIVE_ENABLED or not CRM_TOKEN,
+    reason="真实 CRM 写入测试需显式 SAI_RUN_CRM_LIVE=1 和有效 JWT",
+)
 
 
 @pytest_asyncio.fixture

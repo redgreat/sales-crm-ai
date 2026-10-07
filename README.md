@@ -7,7 +7,7 @@
 
 目标：FastAPI + LangGraph + PostgreSQL checkpoint，去掉 AgentZR 网关及计费功能，与现有 CRM 后端点对点集成。联调前端基于 SvelteKit + Tailwind + shadcn-svelte（lyra 风格：暗黑主题、无圆角、企业风）。
 
-## 当前进度（2026-09-29）
+## 当前进度（2026-10-07）
 
 - P0/P1/P2/P3/P4 核心已实现并通过真实 PostgreSQL 测试：单轮抽取图（Stub 模型）、持久 checkpoint、
   Run 队列/租约/执行代次、interrupt/resume 多轮补参、会话绑定、签名认证与防重放、usage 剥离。
@@ -25,7 +25,8 @@
   `scripts\init_checkpoints.py --apply` → `scripts\dev.ps1 start`（默认同时启动前端，`-NoUi` 跳过）。
   浏览器打开 http://127.0.0.1:5174 （前端）。
 - 一键启动：`scripts\dev-all.ps1 start`（四服务：AI API :8310 / CRM :8080 / AI前端 :5173 / CRM前端 :81）。
-- 仍未完成：P5 全业务能力（日报/摘要/问答/ASR/OCR）、P6 验收。
+- P4 的 M-03 建档已完成真实端到端联调；活动/任务侧、响应丢失与撤权场景仍待验收。P5 的 ASR/OCR POC 已通过，输入到 LLM 和正式业务确认链仍待闭环；P6 尚未完成。
+- Docker 镜像采用 S6 守护 API 进程，`/ready` 检查数据库与 worker；构建上下文只包含运行所需文件。CI 的 Python 测试通过后才推送镜像。运行与故障验证见[测试规范](docs/测试规范.md)。
 
 ## Windows 注意
 

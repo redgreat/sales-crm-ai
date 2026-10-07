@@ -8,16 +8,21 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 import uuid
 from typing import Any
 
+import psycopg
 import psycopg_pool
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
 from app.capabilities import get_capability
+from app.auth import OperatorContext
+from app.enhanced_input import StageError, ensure_recognition
+from app.integrations.organize import organize_text
 from app.knowledge import (
     doc_as_fact,
     filter_unauthorized_history,
@@ -60,6 +65,9 @@ class Executor:
         backoff_base_seconds: float = 2.0,
         batch_size: int = 4,
         conversations_ttl_hours: int = 72,
+        settings: Any | None = None,
+        crm_client: Any | None = None,
+        model: Any | None = None,
     ):
         self.pool = pool
         self.graphs = graphs
@@ -69,22 +77,59 @@ class Executor:
         self.batch_size = batch_size
         # <=0 表示禁用会话 TTL 过期清理
         self.conversations_ttl_hours = conversations_ttl_hours
+        self.settings = settings
+        self.crm_client = crm_client
+        self.model = model
+
+    async def _prepare_file_input(self, run: dict[str, Any], run_input: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        if self.settings is None or self.crm_client is None or self.model is None:
+            raise RunFailure("file_ref 执行环境缺少 CRM 客户端或模型", code="FILE_INPUT_UNAVAILABLE")
+        operator = run.get("operator") or {}
+        try:
+            recognized = await ensure_recognition(
+                self.pool, crm_client=self.crm_client,
+                operator=OperatorContext(user_id=str(operator.get("user_id") or ""),
+                                         user_name=str(operator.get("user_name") or "")),
+                file_ref=run_input["file_ref"], settings=self.settings,
+                run_id=str(run["run_id"]),
+            )
+            row = recognized["row"]
+            optimized = await organize_text(self.model, row["raw_text"])
+        except StageError as exc:
+            raise RunFailure(exc.message, code=f"FILE_{exc.stage.upper()}_{exc.code}") from exc
+        layers = {
+            "file_id": row["file_id"], "source_version": row["source_version"],
+            "processing": row["processing"], "recognition_id": row["recognition_id"],
+            "raw_text": row["raw_text"], "raw_version": row["recognition_id"],
+            "anchored_text": row["anchored_text"], "evidence": row["evidence"],
+            "optimized_text": optimized,
+            "optimized_version": "sha256:" + hashlib.sha256(
+                (row["recognition_id"] + "|" + optimized).encode("utf-8")
+            ).hexdigest()[:16],
+            "final_text": None, "final_version": None,
+            "requires_human_confirmation": True,
+        }
+        return optimized, layers
 
     @property
     def worker_id(self) -> str:
         return f"worker-{uuid.uuid4().hex[:12]}"
 
     async def run_batch(self) -> int:
-        """认领并执行一批；返回处理数量。单批内串行执行（并发由多 worker 提供）。"""
-        claimed = await runs_repo.claim_next_runs(
-            self.pool,
-            worker_id=self.worker_id,
-            limit=self.batch_size,
-            lease_seconds=self.lease_seconds,
-        )
-        for run in claimed:
-            await self._execute_claimed(run)
-        return len(claimed)
+        """串行处理一批；每次仅认领即将执行的 Run，避免排队时租约过期。"""
+        processed = 0
+        for _ in range(self.batch_size):
+            claimed = await runs_repo.claim_next_runs(
+                self.pool,
+                worker_id=self.worker_id,
+                limit=1,
+                lease_seconds=self.lease_seconds,
+            )
+            if not claimed:
+                break
+            await self._execute_claimed(claimed[0])
+            processed += 1
+        return processed
 
     async def _qa_context(self, spec: Any, run: dict[str, Any]) -> dict[str, Any]:
         """问答族执行前上下文装配（需求 4.6～4.9）。
@@ -146,9 +191,29 @@ class Executor:
         generation = int(run["execution_generation"])
         capability = run["capability"]
         graph = self.graphs.get(capability)
+        heartbeat = asyncio.create_task(
+            self._renew_lease_until_done(run_id, generation),
+            name=f"lease-heartbeat:{run_id}",
+        )
         try:
             if graph is None:
                 raise RunFailure(f"能力未注册: {capability}", code="CAPABILITY_UNKNOWN")
+
+            spec = get_capability(capability)
+            if spec is not None and (
+                run["graph_version"] != spec.graph_version
+                or run["prompt_version"] != spec.prompt_version
+            ):
+                await runs_repo.fail_run(
+                    self.pool,
+                    run_id=run_id,
+                    generation=generation,
+                    error={"code": "RUN_VERSION_UNSUPPORTED", "message": "Run 版本与当前能力不兼容"},
+                    backoff_seconds=0,
+                    terminal=True,
+                )
+                logger.warning("run %s rejected: unsupported graph or prompt version", run_id)
+                return
 
             config = {"configurable": {"thread_id": run["thread_id"]}}
             resume_values = run.get("resume_values")
@@ -174,8 +239,13 @@ class Executor:
                 invoke_input: Any = Command(resume=resume_values)
             else:
                 run_input = run.get("input") or {}
+                file_layers = None
+                user_text = str(run_input.get("text", ""))
+                if "file_ref" in run_input:
+                    user_text, file_layers = await self._prepare_file_input(run, run_input)
+                    run_input = {**run_input, "_enhanced_input": file_layers}
                 invoke_input = {
-                    "user_text": str(run_input.get("text", "")),
+                    "user_text": user_text,
                     "capability": capability,
                     "input_payload": run_input,
                 }
@@ -209,6 +279,10 @@ class Executor:
                 )
                 return
 
+            layers = (final_state.get("input_payload") or {}).get("_enhanced_input")
+            if layers:
+                result = {**result, "enhanced_input": layers}
+
             persisted = await runs_repo.complete_run(
                 self.pool, run_id=run_id, generation=generation, result=result
             )
@@ -223,6 +297,30 @@ class Executor:
         except Exception as exc:  # noqa: BLE001
             logger.exception("run %s executor crash", run_id)
             await self._handle_failure(run_id, generation, {"code": "EXECUTOR_CRASH", "message": str(exc)})
+        finally:
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
+
+    async def _renew_lease_until_done(self, run_id: str, generation: int) -> None:
+        """执行期间周期续租；状态或代次变化后自然停止。"""
+        interval = max(0.1, self.lease_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                renewed = await runs_repo.renew_lease(
+                    self.pool,
+                    run_id=run_id,
+                    generation=generation,
+                    lease_seconds=self.lease_seconds,
+                )
+            except Exception:  # noqa: BLE001 —— 短暂数据库故障由后续心跳继续尝试
+                logger.exception("run %s lease renewal failed (gen %d)", run_id, generation)
+                continue
+            if not renewed:
+                return
 
     async def _append_assistant_message(self, run: dict[str, Any], result: dict[str, Any]) -> None:
         """会话内运行的助手消息落库（脱敏文本，不含 usage/token 元数据）。
@@ -303,19 +401,50 @@ async def run_worker_loop(
     last_reap = 0.0
     last_sweep = 0.0
     while not stop_event.is_set():
-        processed = await executor.run_batch()
-        now = time.monotonic()
-        if now - last_reap >= reap_interval_seconds:
-            await executor.reap_expired_leases()
-            last_reap = now
-        if now - last_sweep >= conversation_sweep_interval_seconds:
+        try:
+            processed = await executor.run_batch()
+            now = time.monotonic()
+            if now - last_reap >= reap_interval_seconds:
+                await executor.reap_expired_leases()
+                last_reap = now
+            if now - last_sweep >= conversation_sweep_interval_seconds:
+                try:
+                    await executor.expire_stale_conversations()
+                except Exception:  # noqa: BLE001 —— 清理失败不影响队列主流程
+                    logger.exception("conversation ttl sweep failed")
+                last_sweep = now
+        except (psycopg.Error, psycopg_pool.PoolTimeout, TimeoutError):
+            # 数据库短暂失联后继续扫描；其他程序错误交给 /ready 报警。
+            logger.exception("worker iteration failed; retrying")
+            delay = max(1.0, min(reap_interval_seconds, 5.0))
             try:
-                await executor.expire_stale_conversations()
-            except Exception:  # noqa: BLE001 —— 清理失败不影响队列主流程
-                logger.exception("conversation ttl sweep failed")
-            last_sweep = now
+                await asyncio.wait_for(stop_event.wait(), timeout=delay)
+            except TimeoutError:
+                pass
+            continue
         if not processed:
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=poll_interval_seconds)
             except TimeoutError:
                 pass
+
+
+async def stop_workers(
+    workers: list[asyncio.Task[Any]], stop_event: asyncio.Event, *, timeout_seconds: float
+) -> None:
+    """先请求正常退出，超过宽限期后取消仍在执行的 worker。"""
+    stop_event.set()
+    if not workers:
+        return
+    done, pending = await asyncio.wait(workers, timeout=timeout_seconds)
+    if pending:
+        logger.warning("%d worker did not stop within %.1fs; cancelling", len(pending), timeout_seconds)
+        for task in pending:
+            task.cancel()
+        cancelled, pending = await asyncio.wait(pending, timeout=1.0)
+        done.update(cancelled)
+    if pending:
+        logger.error("%d worker did not respond to cancellation", len(pending))
+    for task in done:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("worker exited with error", exc_info=(type(error), error, error.__traceback__))

@@ -28,14 +28,17 @@ auth:
   timestamp_window_seconds: 300
   nonce_ttl_seconds: 600
 
-# CRM 集成（AI -> CRM 出站授权事实查询；base_url 留空则不启用出站客户端）
-# 冻结契约（P4，2026-10-01）：
+# CRM 集成（AI -> CRM 出站授权事实查询 / P5 附件受控访问；base_url 留空则不启用出站客户端）
+# 冻结契约（P4，2026-10-01；P5 附件 2026-10-07）：
 #   GET {base_url}/ai/integration/facts/{subject_type}/{subject_id}
-#   签名见 app/auth.py；返回 {subject_type, subject_id, found, facts:{...}}。
+#   GET {base_url}/ai/integration/files/{file_id}          （附件元数据+受控访问方式）
+#   GET {base_url}/ai/integration/files/{file_id}/content  （仅 CRM local 存储模式取字节）
+#   签名见 app/auth.py；事实返回 {found, facts:{...}}，附件返回 {found, file, access}。
 #   base_url 必须含 CRM 应用前缀，例如 http://127.0.0.1:8080/api/v1/salescrm
+#   key_id/secret 与 CRM 端 salescrm.ai.key-id / AI_SERVICE_AUTH_SECRET 同源（双向同钥，crm-ai）
 crm:
   base_url: ""
-  key_id: ai-crm
+  key_id: crm-ai
   secret: ""
   timeout_seconds: 10
 
@@ -96,6 +99,7 @@ worker:
   max_attempts: 3
   backoff_base_seconds: 2.0
   reap_interval_seconds: 5.0
+  shutdown_grace_seconds: 5.0  # 容器停止时等待 worker 正常退出的秒数
 
 # API
 api:

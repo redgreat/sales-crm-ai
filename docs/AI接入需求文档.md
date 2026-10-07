@@ -347,7 +347,7 @@ flowchart TD
 | 组件 | 一期职责 |
 |---|---|
 | H5/前端 | 主动录音/拍照/选文件、上传与处理进度、原文和优化结果对照、编辑确认、离页恢复；不持长期云凭据。 |
-| CRM API | 身份/对象/来源权限、文件归属及上传授权、元数据/保留期、AI Run 代理与结果查询、人工确认后的业务写入；优先复用已有文件服务，是否满足需盘点。 |
+| CRM API | 身份/对象/来源权限、文件归属及上传授权、元数据/保留期、AI Run 代理与结果查询、人工确认后的业务写入；优先复用已有文件服务，是否满足需盘点。（**2026-10-07 盘点结论与文件契约冻结见 12.5**：CRM 无既有通用文件服务，新建 resource_info + 附件公共组件。） |
 | Python AI | ASR/OCR/文本解析 → 原始文本与证据 → LLM 整理/抽取 → 补参/候选；保存阶段输出与供应商任务引用，负责恢复及有限重试。 |
 | 私有 OSS | 存原始音频/图片/附件；业务归属在 CRM。AI 可有受限临时文件空间，必须规定清理、授权和保留期，不复制一套业务附件系统。 |
 
@@ -390,6 +390,35 @@ AI 任务应能区分待处理、识别中、整理中、待补参、完成、�
 ### 12.4 页面落点
 
 M10/M11 沟通上传、M13～M15 拜访录音、M23～M25 会议输入共用该链；M16 语音补充日报只把识别/整理结果送草稿编辑，不自动提交日报。测试页增加原文/优化文本/锚点/阶段失败及重试展示；不新增工作手机自动采集、实时转写、声音身份识别或未经确认的业务写入。
+
+### 12.5 文件契约冻结（2026-10-07，P5-INPUT 任务 1）
+
+**架构决策（2026-10-07 用户确认）**：业务附件归 CRM——zrcrm 主库建 `resource_info` 登记表，上传/下载公共组件在 `sales-crm-api-service` 实现；AI 不自建附件系统、不重复搬运文件（AI 自有的 OSS 适配器仅用于其临时识别材料，不承载业务附件）。AI 侧识别产物（原文/整理文/确认文三层）持久化仍归 AI 库，属 P5-INPUT 任务 2。
+
+**职责与归属**
+
+| 项 | 归属 |
+|---|---|
+| 文件本体存储 | OSS 私有桶（生产 `salescrm.oss.mode=oss`，凭据经环境变量注入）；dev 联调 `mode=local` 落 `{salescrm.files.dir}/resources/`，不提供外部 URL |
+| 元数据/授权/撤权 | CRM `resource_info`（CHAR(12) RS 前缀主键；biz_type/biz_id 业务绑定、version 来源版本、ACTIVE/REVOKED 撤权、软删） |
+| 身份与权限 | 业务端上传/绑定/撤权/下载=JWT 本人；AI 访问=HMAC（AiServiceSignatureFilter），仅本人附件可见 |
+| AI 侧 | 持久化文件标识而非签名 URL；每次使用前经 CRM 受控访问校验；撤权/删除后不可再取 |
+
+**file_ref 契约**：`{file_id: "RS"+10位, source_version: int, processing: asr|ocr|parse}`。文件或版本变化必须显式重新处理，不命中旧结果。
+
+**双端端点**
+
+- 业务端（JWT）：`POST /api/v1/salescrm/resources/upload`（multipart，biz_type/biz_id 可选——AI 链路先传后建档再 bind）、`POST /{id}/bind`、`POST /{id}/revoke`、`GET /{id}`、`GET /{id}/file`（流式返回）。
+- AI 端（HMAC，凭据=crm-ai + AI_SERVICE_AUTH_SECRET，双向同钥）：`GET /api/v1/salescrm/ai/integration/files/{id}` → `{found, file:{id,file_name,content_type,file_kind,size_bytes,source_version,status,biz_type,biz_id,created_at}, access:{type: signed_url|inline|none, url?, expires_in_seconds?, content_path?}}`；`GET .../{id}/content` 仅 local 模式取字节（oss 模式 CRM 返回 400——AI 直拉签名 URL，不经 CRM 中转）。
+- 归一语义：非本人/不存在/已删除 → `found=false`（HTTP 200，不泄露存在性）；撤权（本人可见）→ `found=true + status=REVOKED + access.type=none`。签名 URL 短时有效，过期重新调用获取。
+
+**分级上限（初版默认值，联调后按供应商实际限额校正）**：音频 200MB（mp3/wav/m4a/aac/amr/ogg/flac）、图片 10MB（jpg/jpeg/png/bmp/webp/gif）、文档 20MB（pdf/office/txt/md/csv/json/yaml/log）；白名单外类型显式拒绝。上传即新行（id 唯一标识一份内容），version 预留给同业务槽位原位替换递增。
+
+**错误语义**：上传（类型/大小/空文件）、受控访问（found=false/none）、下载（403 撤权）分阶段显式报错；`mode=oss` 四项凭据缺一启动即失败，不回退假成功。
+
+**证据（2026-10-07）**：CRM `service_dev_ai@881878e`（= origin/master `0a5dd8e` + 附件组件提交）；Flyway **V049** 已在 dev 库执行并登记（checksum 362394189；同轮补应用了 V048）；端到端烟测 **16 场景通过**（上传登记/元数据/下载/AI HMAC 访问/inline 字节/跨用户归一 found=false/撤权后下载 403 + access.type=none/不存在归一/错误密钥 401）；AI 侧 `tests/test_p5_file_contract.py` 8 项 + P4 契约回归 5 项 = 13 passed。**不含**：真实 OSS 上传（开放项 B-4）、ASR/OCR 供应商调用、生产 H5。
+
+**仍开放**：OSS bucket 凭据与前缀/签名时效策略（开放项 B-4）；resource_info 保留期与物理清理任务；生产 H5 接入（开放项 A-1）；AI 侧识别产物与三层文本持久化（P5-INPUT 任务 2）。
 
 ## 13. P4 双端接口契约（由 2026-10-01 冻结稿归并）
 

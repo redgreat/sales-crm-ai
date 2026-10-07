@@ -50,15 +50,19 @@ async def parse_files(body: ParseFilesBody) -> dict[str, Any]:
     total = 0
     for item in body.files:
         name = item.name.strip() or "(未命名)"
+        remaining = REQUEST_MAX_BYTES - total
+        if len(item.data_base64) > 4 * ((remaining + 2) // 3):
+            failed.append({"name": name, "reason": "单次请求文件总大小超限（5MB）"})
+            continue
         try:
             data = base64.b64decode(item.data_base64, validate=True)
         except (binascii.Error, ValueError):
             failed.append({"name": name, "reason": "data_base64 不是合法的 base64"})
             continue
-        total += len(data)
-        if total > REQUEST_MAX_BYTES:
+        if total + len(data) > REQUEST_MAX_BYTES:
             failed.append({"name": name, "reason": "单次请求文件总大小超限（5MB）"})
             continue
+        total += len(data)
         try:
             result = parse_bytes(
                 data=data,

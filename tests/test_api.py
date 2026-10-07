@@ -159,6 +159,38 @@ async def test_cross_user_access_denied(dev_api):
     assert other.status_code == 403
 
 
+async def test_idempotency_key_is_scoped_to_operator(dev_api):
+    """相同幂等键和输入不能让另一个用户命中并读取前一用户的 Run。"""
+    client, settings = dev_api
+    key = f"shared-{uuid.uuid4().hex}"
+    payload = {
+        "capability": "communication.extract",
+        "input": {"text": GOOD_TEXT},
+        "idempotency_key": key,
+    }
+    first = await _post(client, settings, "/api/v1/runs", payload, user_id="u1")
+    second = await _post(client, settings, "/api/v1/runs", payload, user_id="u2")
+    assert first.status_code == 202 and second.status_code == 202
+    assert first.json()["run_id"] != second.json()["run_id"]
+    assert second.json()["idempotent_replay"] is False
+
+
+async def test_run_key_reuse_with_changed_input_returns_conflict(dev_api):
+    client, settings = dev_api
+    key = f"changed-{uuid.uuid4().hex}"
+    first = await _post(client, settings, "/api/v1/runs", {
+        "capability": "communication.extract", "input": {"text": GOOD_TEXT},
+        "idempotency_key": key,
+    })
+    changed = await _post(client, settings, "/api/v1/runs", {
+        "capability": "communication.extract", "input": {"text": "另一条任务"},
+        "idempotency_key": key,
+    })
+    assert first.status_code == 202
+    assert changed.status_code == 409
+    assert changed.json()["error"]["code"] == "CONFLICT"
+
+
 async def test_cancel_run(dev_api):
     client, settings = dev_api
     response = await _post(client, settings, "/api/v1/runs",

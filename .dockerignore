@@ -1,35 +1,29 @@
-# 依赖
-node_modules
-.venv
+# 只把镜像构建所需文件交给 Docker。
+**
+!requirements.lock
+!app/
+!app/**
+!frontend/
+!frontend/**
+!scripts/
+!scripts/serve.py
+!scripts/init_db.py
+!scripts/init_checkpoints.py
+!deploy/
+!deploy/s6/
+!deploy/s6/ai-api/
+!deploy/s6/ai-api/**
+!deploy/s6-user-bundles/
+!deploy/s6-user-bundles/user/
+!deploy/s6-user-bundles/user/contents.d/
+!deploy/s6-user-bundles/user/contents.d/ai-api
 
-# 构建产物
-.svelte-kit
-build
-dist
-
-# 本地数据
-.local
-logs
-*.pid
-*.runtime.json
-
-# 配置（含密钥）
-conf/config.yml
-.env
-.env.local
-
-# IDE
-.vscode
-.idea
-
-# 测试
-.pytest_cache
-.coverage
-htmlcov
-
-# Git
-.git
-.github
-
-# 文档
-docs/_build
+# 即使位于允许目录中，也不发送本地依赖、产物或密钥。
+**/node_modules
+**/.svelte-kit
+**/__pycache__
+**/*.py[codz]
+**/.env*
+**/config.yml
+**/*.pid
+**/*.runtime.json

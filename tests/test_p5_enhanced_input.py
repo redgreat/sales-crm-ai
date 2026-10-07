@@ -34,7 +34,7 @@ from app.integrations.oss import OssError, StubOssClient, build_oss_client
 
 _SUBMIT_PATH = "/api/v1/services/audio/asr/transcription"
 _TASK_PATH = "/api/v1/tasks/t1"
-_RESULT_URL = "https://result.example/x.json"
+_RESULT_URL = "https://result.oss-cn-beijing.aliyuncs.com/x.json"
 
 
 def _settings(**overrides: object) -> Settings:
@@ -86,7 +86,7 @@ def _mock_asr_handler(task_statuses: list[str]) -> httpx.MockTransport:
                     json={"output": {"task_status": status, "results": [{"transcription_url": _RESULT_URL}]}},
                 )
             return httpx.Response(200, json={"output": {"task_status": status}})
-        if url.startswith("https://result.example/"):
+        if url.startswith("https://result.oss-cn-beijing.aliyuncs.com/"):
             return httpx.Response(200, json=_result_payload())
         return httpx.Response(404, json={"error": "unexpected"})
 

@@ -13,15 +13,18 @@ from app.auth import OperatorContext
 from app.capabilities import CapabilitySpec, get_capability, pregen_idempotency_key
 from app.errors import (
     CapabilityUnknown,
+    Conflict,
     Forbidden,
     NotFound,
     RunNotResumable,
     StateVersionConflict,
     ValidationFailed,
 )
+from app.enhanced_input import validate_file_ref
 from app.graphs.interrupts import get_pending_interrupt
 from app.persistence import conversations as conversations_repo
 from app.persistence import runs as runs_repo
+from app.persistence import recognition as recognition_repo
 from app.util import utcnow
 
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
@@ -94,13 +97,23 @@ def _validate_capability_input(spec: CapabilitySpec, body: CreateRunBody) -> Non
     - 预生成型：额外需要 beneficiary.user_id 与 schedule_key（调度幂等）。
     """
     payload = body.input or {}
-    missing = [path for path in spec.required_input_fields if not _dotted(payload, path)]
+    file_ref = payload.get("file_ref")
+    if file_ref is not None:
+        if not spec.requires_text:
+            raise ValidationFailed("该能力不接受 file_ref", details={"capability": spec.name})
+        validate_file_ref(file_ref)
+        if str(payload.get("text") or "").strip():
+            raise ValidationFailed("input.text 与 input.file_ref 只能二选一")
+    missing = [
+        path for path in spec.required_input_fields
+        if not (path == "text" and file_ref is not None) and not _dotted(payload, path)
+    ]
     if missing:
         raise ValidationFailed(
             f"缺少必填输入: {', '.join(missing)}",
             details={"capability": spec.name, "missing": missing},
         )
-    if spec.requires_text and not str(payload.get("text", "")).strip():
+    if spec.requires_text and file_ref is None and not str(payload.get("text", "")).strip():
         raise ValidationFailed(
             "input.text 不能为空",
             details={"capability": spec.name, "field": "text"},
@@ -161,6 +174,12 @@ def _derive_idempotency_key(spec: CapabilitySpec, payload: dict[str, Any]) -> st
     return "auto:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
 
 
+def _scope_idempotency_key(key: str, operator_user_id: str) -> str:
+    """把调用方幂等键限制在当前操作者内，避免全局唯一索引跨用户串 Run。"""
+    owner = hashlib.sha256(operator_user_id.encode("utf-8")).hexdigest()[:24]
+    return f"operator:{owner}:{key}"
+
+
 def _resolve_idempotency_key(spec: CapabilitySpec, body: CreateRunBody) -> tuple[str, str]:
     """返回 (幂等键, 来源)；预生成一律由 schedule_key 派生，避免两端重复调度。"""
     if spec.pregen:
@@ -184,7 +203,8 @@ async def create_run(body: CreateRunBody, request: Request, operator: OperatorCo
     if spec is None:
         raise CapabilityUnknown(f"未知能力: {body.capability}")
     _validate_capability_input(spec, body)
-    idempotency_key, idempotency_source = _resolve_idempotency_key(spec, body)
+    raw_idempotency_key, idempotency_source = _resolve_idempotency_key(spec, body)
+    idempotency_key = _scope_idempotency_key(raw_idempotency_key, operator.user_id)
 
     conversation_id = body.conversation_id
     if conversation_id:
@@ -229,18 +249,25 @@ async def create_run(body: CreateRunBody, request: Request, operator: OperatorCo
         thread_id = None  # create_run 内默认 run:{run_id}
 
     settings = request.app.state.settings
-    run, created = await runs_repo.create_run(
-        request.app.state.pool,
-        idempotency_key=idempotency_key,
-        capability=body.capability,
-        input_payload=body.input,
-        operator={"user_id": operator.user_id, "user_name": operator.user_name},
-        thread_id=thread_id,
-        conversation_id=conversation_id,
-        graph_version=spec.graph_version,
-        prompt_version=spec.prompt_version,
-        max_attempts=body.max_attempts or settings.worker.max_attempts,
-    )
+    try:
+        run, created = await runs_repo.create_run(
+            request.app.state.pool,
+            idempotency_key=idempotency_key,
+            capability=body.capability,
+            input_payload=body.input,
+            operator={"user_id": operator.user_id, "user_name": operator.user_name},
+            thread_id=thread_id,
+            conversation_id=conversation_id,
+            graph_version=spec.graph_version,
+            prompt_version=spec.prompt_version,
+            max_attempts=body.max_attempts or settings.worker.max_attempts,
+        )
+    except runs_repo.IdempotencyKeyConflict as exc:
+        raise Conflict(str(exc)) from exc
+    except runs_repo.ConversationInactive as exc:
+        raise ValidationFailed(str(exc)) from exc
+    except runs_repo.ResumeInProgress as exc:
+        raise StateVersionConflict(str(exc)) from exc
     payload = _serialize(run)
     payload["idempotent_replay"] = not created
     payload["idempotency_source"] = idempotency_source
@@ -312,6 +339,7 @@ async def cancel_run(run_id: str, request: Request, operator: OperatorContext = 
     cancelled = await runs_repo.cancel_run(request.app.state.pool, run_id=run_id)
     if not cancelled:
         raise RunNotResumable("Run 已结束，不能取消")
+    await recognition_repo.cancel_by_run(request.app.state.pool, run_id)
     return {"run_id": run_id, "status": "cancelled", "cancelled_at": utcnow().isoformat()}
 
 
@@ -348,5 +376,11 @@ async def resume_run(run_id: str, body: ResumeBody, request: Request, operator: 
 
     accepted = await runs_repo.queue_resume(request.app.state.pool, run_id=run_id, values=body.values)
     if not accepted:
+        if run.get("conversation_id"):
+            latest = await conversations_repo.get_conversation(
+                request.app.state.pool, str(run["conversation_id"])
+            )
+            if latest is not None and latest["status"] != "active":
+                raise ValidationFailed(f"会话已{_closed_word(latest['status'])}，不能恢复其中的等待 Run")
         raise RunNotResumable("恢复请求已被处理")
     return {"run_id": run_id, "status": "queued", "resumed_from": "waiting_input"}

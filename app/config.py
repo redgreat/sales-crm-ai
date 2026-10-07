@@ -112,12 +112,13 @@ class OssSettings(BaseModel):
 
 class WorkerSettings(BaseModel):
     enabled: bool = True
-    concurrency: int = 2
-    poll_interval_seconds: float = 0.5
-    lease_seconds: int = 120
-    max_attempts: int = 3
-    backoff_base_seconds: float = 2.0
-    reap_interval_seconds: float = 5.0
+    concurrency: int = Field(default=2, gt=0)
+    poll_interval_seconds: float = Field(default=0.5, gt=0)
+    lease_seconds: int = Field(default=120, gt=0)
+    max_attempts: int = Field(default=3, gt=0)
+    backoff_base_seconds: float = Field(default=2.0, ge=0)
+    reap_interval_seconds: float = Field(default=5.0, gt=0)
+    shutdown_grace_seconds: float = Field(default=5.0, gt=0, le=60)
 
 
 class ConversationsSettings(BaseModel):

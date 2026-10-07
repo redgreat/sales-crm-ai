@@ -2,16 +2,17 @@
 
 测试分两层：
 1. AI 侧（内置 API，无需外部认证）：Run 创建 → 抽取 → 缺参 → 恢复 → 候选
-2. CRM 侧（需 JWT，环境变量 SAI_CRM_TOKEN）：导入候选 → 确认写入正式对象
+2. CRM 侧（需显式 SAI_RUN_CRM_LIVE=1 和有效 JWT）：导入候选 → 确认写入正式对象
 
 用法:
   # 仅测 AI 侧（默认，无需 token）
   pytest tests/test_crm_integration.py -v
 
   # 全流程（含 CRM 写入）
+  $env:SAI_RUN_CRM_LIVE = "1"
   $env:SAI_CRM_TOKEN = "Bearer eyJ..."
   $env:SAI_CRM_BASE_URL = "http://127.0.0.1:8080"   # 可选，默认 8080
-  pytest tests/test_crm_integration.py -v --run-crm
+  pytest tests/test_crm_integration.py -v -m crmlive
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ import json
 import os
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -47,12 +49,13 @@ def _load_crm_token() -> str:
     return ""
 
 
-CRM_TOKEN = _load_crm_token()
+CRM_LIVE_ENABLED = os.environ.get("SAI_RUN_CRM_LIVE") == "1"
+CRM_TOKEN = _load_crm_token() if CRM_LIVE_ENABLED else ""
 
 # CRM 写入测试需要 token
 requires_crm = pytest.mark.skipif(
-    not CRM_TOKEN,
-    reason="需要 CRM token（设置 SAI_CRM_TOKEN 或运行 python scripts/get_crm_token.py）",
+    not CRM_LIVE_ENABLED or not CRM_TOKEN,
+    reason="真实 CRM 写入测试需显式 SAI_RUN_CRM_LIVE=1 和有效 JWT",
 )
 
 
@@ -260,6 +263,7 @@ class TestAiSideFlow:
 
 
 # ============ CRM 侧测试（需 JWT） ============
+@pytest.mark.crmlive
 class TestCrmSideIntegration:
     """CRM Java 集成薄层：代理创建、导入候选、确认写入。"""
 
@@ -289,8 +293,7 @@ class TestCrmSideIntegration:
                 break
             await asyncio.sleep(1.5)
 
-        if status != "succeeded":
-            pytest.skip(f"Run 未成功: {status}")
+        assert status == "succeeded", f"Run 未成功: {status}"
 
         # 导入候选
         ir = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/import")
@@ -318,8 +321,7 @@ class TestCrmSideIntegration:
                 break
             await asyncio.sleep(1.5)
 
-        if status != "succeeded":
-            pytest.skip(f"Run 未成功: {status}")
+        assert status == "succeeded", f"Run 未成功: {status}"
 
         # 第一次导入
         r1 = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/import")
@@ -329,6 +331,7 @@ class TestCrmSideIntegration:
         # 第二次导入（应返回 duplicate 标记）
         r2 = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/import")
         items2 = r2.json().get("items", [])
+        assert len(items2) == len(items1)
         for item in items2:
             assert item.get("duplicate") is True  # 重复导入标记
 
@@ -346,23 +349,24 @@ class TestCrmSideIntegration:
                 break
             await asyncio.sleep(1.5)
 
-        if status != "succeeded":
-            pytest.skip(f"Run 未成功: {status}")
+        assert status == "succeeded", f"Run 未成功: {status}"
 
         # 导入
-        await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/import")
+        imported = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/import")
+        assert imported.status_code == 200
+        item_ids = [item["item_id"] for item in imported.json().get("items", [])]
+        assert item_ids, "未产生可确认候选"
 
         # 确认（先活动后任务）
-        cr = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/confirm", json={})
+        cr = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/confirm", json={"item_ids": item_ids})
         assert cr.status_code == 200
         results = cr.json().get("results", [])
         assert len(results) >= 1
 
         # 检查写入状态
-        has_written = any(r.get("write_status") == "WRITTEN" for r in results)
-        has_failed = any(r.get("write_status") == "FAILED" for r in results)
-        # 至少一项写入成功或明确失败（缺参）
-        assert has_written or has_failed
+        assert any(r.get("write_status") == "WRITTEN" for r in results), (
+            f"所有候选均未正式写入: {results}"
+        )
 
     @requires_crm
     async def test_crm_ignore_candidate(self, crm_api):
@@ -378,14 +382,12 @@ class TestCrmSideIntegration:
                 break
             await asyncio.sleep(1.5)
 
-        if status != "succeeded":
-            pytest.skip(f"Run 未成功: {status}")
+        assert status == "succeeded", f"Run 未成功: {status}"
 
         # 导入
         ir = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/import")
         items = ir.json().get("items", [])
-        if not items:
-            pytest.skip("无候选可忽略")
+        assert items, "无候选可忽略"
 
         # 忽略第一条
         cand_id = items[0].get("id")
@@ -407,18 +409,24 @@ class TestCrmSideIntegration:
                 break
             await asyncio.sleep(1.5)
 
-        if status != "succeeded":
-            pytest.skip(f"Run 未成功: {status}")
+        assert status == "succeeded", f"Run 未成功: {status}"
 
-        await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/import")
+        imported = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/import")
+        assert imported.status_code == 200
+        item_ids = [item["item_id"] for item in imported.json().get("items", [])]
+        assert item_ids, "未产生可确认候选"
 
         # 第一次确认
-        r1 = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/confirm", json={})
+        r1 = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/confirm", json={"item_ids": item_ids})
+        assert r1.status_code == 200
         results1 = r1.json().get("results", [])
+        assert any(item.get("write_status") == "WRITTEN" for item in results1), results1
 
         # 第二次确认（应幂等）
-        r2 = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/confirm", json={})
+        r2 = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/confirm", json={"item_ids": item_ids})
+        assert r2.status_code == 200
         results2 = r2.json().get("results", [])
+        assert len(results1) == len(results2)
 
         # 同一 item 的 formal_id 应一致（幂等键保证不重复写入）
         for a, b in zip(results1, results2):
@@ -428,6 +436,7 @@ class TestCrmSideIntegration:
 
 
 # ============ 全链路测试（AI 真实模型 + CRM） ============
+@pytest.mark.crmlive
 class TestFullLoop:
     """真实文字 → AI 抽取 → CRM 导入 → 确认写入，完整闭环。"""
 
@@ -449,10 +458,14 @@ class TestFullLoop:
                 break
             if status == "waiting_input":
                 # 自动补参恢复
-                await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/resume", json={
-                    "state_version": 1,
-                    "values": {"due_date": "2026-10-15", "assignee_name": "测试负责人"},
+                pending = await crm_api.get(f"/api/v1/salescrm/ai/runs/{run_id}/pending")
+                assert pending.status_code == 200 and pending.json().get("waiting")
+                resumed = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/resume", json={
+                    "state_version": pending.json()["state_version"],
+                    "values": {"due_date": (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat(),
+                               "assignee_name": "测试负责人"},
                 })
+                assert resumed.status_code == 200, resumed.text
             await asyncio.sleep(1.5)
         assert status == "succeeded", f"Run 未成功: {status}"
 
@@ -461,35 +474,41 @@ class TestFullLoop:
         assert ir.status_code == 200
         items = ir.json().get("items", [])
         assert len(items) >= 1, "应至少产生 1 个候选"
+        activity_items = [item for item in items if item.get("candidate_type") == "ACTIVITY"]
+        task_items = [item for item in items if item.get("candidate_type") == "TASK"]
+        assert activity_items and task_items, f"本样本须同时产生活动和任务候选: {items}"
 
         # 查询一个真实客户用于 overrides
         cust_resp = await crm_api.get("/api/v1/salescrm/customers?page=1&size=1")
         cust_id = None
         if cust_resp.status_code == 200:
-            items = cust_resp.json().get("records") or cust_resp.json().get("data") or []
-            if items:
-                cust_id = items[0].get("id")
+            customers = cust_resp.json().get("records") or cust_resp.json().get("data") or []
+            if customers:
+                cust_id = customers[0].get("id")
 
-        # 确认写入（提供 overrides 补齐必填字段）
-        override_item = {"item_id": "activity:0", "summary": unique_text}
-        if cust_id:
-            override_item["customer_id"] = cust_id
-        confirm_body = {"items": [override_item]}
+        assert cust_id, "缺少可用于正式写入验收的有权客户"
+        due_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        overrides = [
+            {
+                "item_id": item["item_id"],
+                "customer_id": cust_id,
+                "summary": unique_text,
+                **({"due_at": due_at} if item["candidate_type"] == "TASK" else {}),
+            }
+            for item in items
+        ]
+        confirm_body = {"item_ids": [item["item_id"] for item in items], "items": overrides}
         cr = await crm_api.post(f"/api/v1/salescrm/ai/runs/{run_id}/confirm", json=confirm_body)
         assert cr.status_code == 200
         results = cr.json().get("results", [])
 
-        # 验证至少有一个写入成功（或因业务规则拒绝，但流程正常完成）
+        # 正式闭环必须真的写入；全项业务失败不是通过。
         written = [r for r in results if r.get("write_status") == "WRITTEN"]
         failed = [r for r in results if r.get("write_status") == "FAILED"]
+        assert results, "确认接口未返回逐项结果"
         assert len(written) + len(failed) == len(results), f"结果状态异常: {results}"
-        if written:
-            for item in written:
-                assert item.get("formal_activity_id") or item.get("formal_task_id")
-        else:
-            # 未匹配客户导致写入失败是正确行为（PRD 05 §7.2）
-            for item in failed:
-                assert "必填缺失" in (item.get("write_error") or "")
+        assert any(item.get("formal_activity_id") for item in written), f"活动未正式写入: {results}"
+        assert any(item.get("formal_task_id") for item in written), f"任务未正式写入: {results}"
 
         # 验证正式 ID 存在
         for item in written:

@@ -20,6 +20,18 @@ from psycopg.rows import dict_row
 from app.util import new_uuid, utcnow
 
 
+class IdempotencyKeyConflict(ValueError):
+    """同一请求键被用于不同能力、输入或会话。"""
+
+
+class ConversationInactive(ValueError):
+    """Run 落库前会话已关闭或过期。"""
+
+
+class ResumeInProgress(ValueError):
+    """同一会话线程正在处理补参。"""
+
+
 def canonical_input_hash(input_payload: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(input_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -59,6 +71,25 @@ async def create_run(
     run_id = new_uuid()
     async with pool.connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
+            if conversation_id:
+                await cur.execute(
+                    "SELECT status FROM ai_conversations WHERE conversation_id = %s FOR UPDATE",
+                    (UUID(conversation_id),),
+                )
+                conversation = await cur.fetchone()
+                if conversation is None or conversation["status"] != "active":
+                    raise ConversationInactive("会话已结束，不能创建 Run")
+                await cur.execute(
+                    """
+                    SELECT 1 FROM ai_runs
+                    WHERE conversation_id = %s AND status IN ('queued', 'running')
+                      AND resume_values IS NOT NULL
+                    LIMIT 1
+                    """,
+                    (UUID(conversation_id),),
+                )
+                if await cur.fetchone() is not None:
+                    raise ResumeInProgress("补参正在处理，请等待当前 Run 完成后重试")
             await cur.execute(
                 """
                 INSERT INTO ai_runs (run_id, idempotency_key, capability, status, input,
@@ -89,6 +120,13 @@ async def create_run(
             existing = await cur.fetchone()
             if existing is None:
                 raise RuntimeError("Run 创建冲突：幂等键存在但查询不到")
+            if (
+                existing["capability"] != capability
+                or existing["input_hash"] != canonical_input_hash(input_payload)
+                or str(existing["conversation_id"] or "") != str(conversation_id or "")
+                or (existing["operator"] or {}).get("user_id") != operator.get("user_id")
+            ):
+                raise IdempotencyKeyConflict("幂等键已用于不同请求")
             return _row_to_dict(existing), False
 
 
@@ -112,6 +150,26 @@ async def find_latest_run_by_status(
                 ORDER BY created_at DESC LIMIT 1
                 """,
                 (UUID(conversation_id), status),
+            )
+            row = await cur.fetchone()
+            return _row_to_dict(row) if row else None
+
+
+async def find_active_resume(
+    pool: psycopg.AsyncConnectionPool, *, conversation_id: str
+) -> dict[str, Any] | None:
+    """查找补参已入队或执行中的 Run，防止同会话新消息并行推进线程。"""
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT * FROM ai_runs
+                WHERE conversation_id = %s
+                  AND status IN ('queued', 'running')
+                  AND resume_values IS NOT NULL
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (UUID(conversation_id),),
             )
             row = await cur.fetchone()
             return _row_to_dict(row) if row else None
@@ -217,9 +275,11 @@ async def fail_run(
     generation: int,
     error: dict[str, Any],
     backoff_seconds: float,
+    terminal: bool = False,
 ) -> str | None:
     """失败处理：未耗尽重试回队列（延迟），耗尽转终态 failed。
 
+    terminal 用于不可兼容的版本：不耗尽全部重试次数就进入 failed。
     返回 'queued' | 'failed' | None（None 表示代次不匹配，拒绝写入）。
     """
     async with pool.connection() as conn:
@@ -227,23 +287,29 @@ async def fail_run(
             await cur.execute(
                 """
                 UPDATE ai_runs
-                SET status = CASE WHEN attempt_count >= max_attempts THEN 'failed' ELSE 'queued' END,
+                SET status = CASE WHEN %s OR attempt_count >= max_attempts THEN 'failed' ELSE 'queued' END,
                     error = %s,
-                    run_after = CASE WHEN attempt_count >= max_attempts
+                    run_after = CASE WHEN %s OR attempt_count >= max_attempts
                                      THEN run_after
                                      ELSE now() + make_interval(secs => %s) END,
-                    finished_at = CASE WHEN attempt_count >= max_attempts THEN now() ELSE NULL END,
+                    finished_at = CASE WHEN %s OR attempt_count >= max_attempts THEN now() ELSE NULL END,
                     updated_at = now(),
                     lease_owner = NULL,
                     lease_expires_at = NULL,
-                    status_history = status_history || %s::jsonb
+                    status_history = status_history || CASE
+                        WHEN %s OR attempt_count >= max_attempts THEN %s::jsonb ELSE %s::jsonb END
                 WHERE run_id = %s AND status = 'running' AND execution_generation = %s
                 RETURNING status
                 """,
                 (
+                    terminal,
                     json.dumps(error, ensure_ascii=False),
+                    terminal,
                     float(backoff_seconds),
-                    _history_entry("failed_attempt", error=error),
+                    terminal,
+                    terminal,
+                    _history_entry("failed", error=error),
+                    _history_entry("queued", reason="retry", error=error),
                     UUID(run_id),
                     generation,
                 ),
@@ -279,6 +345,18 @@ async def queue_resume(
     """恢复等待中的 Run：仅 waiting_input 可恢复（重复/并发 resume 拒绝）。"""
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
+            await cur.execute("SELECT conversation_id FROM ai_runs WHERE run_id = %s", (UUID(run_id),))
+            row = await cur.fetchone()
+            if row is None:
+                return False
+            if row[0] is not None:
+                await cur.execute(
+                    "SELECT status FROM ai_conversations WHERE conversation_id = %s FOR UPDATE",
+                    (row[0],),
+                )
+                conversation = await cur.fetchone()
+                if conversation is None or conversation[0] != "active":
+                    return False
             await cur.execute(
                 """
                 UPDATE ai_runs
@@ -322,30 +400,38 @@ async def cancel_run(pool: psycopg.AsyncConnectionPool, *, run_id: str) -> bool:
 async def requeue_expired_leases(
     pool: psycopg.AsyncConnectionPool, *, limit: int = 50
 ) -> list[str]:
-    """回收租约过期的 running 任务（worker 崩溃恢复）：回队列，下次认领 generation+1。"""
+    """回收崩溃 worker 的 Run；达到尝试上限时终止，避免无限认领。"""
     async with pool.connection() as conn:
         async with conn.transaction():
             async with conn.cursor() as cur:
                 await cur.execute(
                     """
-                    UPDATE ai_runs
-                    SET status = 'queued',
+                    UPDATE ai_runs r
+                    SET status = CASE WHEN r.attempt_count >= r.max_attempts THEN 'failed' ELSE 'queued' END,
                         run_after = now(),
                         updated_at = now(),
+                        finished_at = CASE WHEN r.attempt_count >= r.max_attempts THEN now() ELSE NULL END,
+                        error = CASE WHEN r.attempt_count >= r.max_attempts THEN %s::jsonb ELSE r.error END,
                         lease_owner = NULL,
                         lease_expires_at = NULL,
-                        status_history = status_history || %s::jsonb
+                        status_history = r.status_history || CASE
+                            WHEN r.attempt_count >= r.max_attempts THEN %s::jsonb ELSE %s::jsonb END
                     WHERE run_id IN (
                         SELECT run_id FROM ai_runs
                         WHERE status = 'running' AND lease_expires_at < now()
                         LIMIT %s
                         FOR UPDATE SKIP LOCKED
                     )
-                    RETURNING run_id
+                    RETURNING r.run_id, r.status
                     """,
-                    (_history_entry("queued", reason="lease_expired"), limit),
+                    (
+                        json.dumps({"code": "LEASE_EXPIRED_ATTEMPTS_EXHAUSTED", "message": "worker 租约过期且已达到最大尝试次数"}, ensure_ascii=False),
+                        _history_entry("failed", reason="lease_expired_attempts_exhausted"),
+                        _history_entry("queued", reason="lease_expired"),
+                        limit,
+                    ),
                 )
-                return [str(row[0]) for row in await cur.fetchall()]
+                return [str(row[0]) for row in await cur.fetchall() if row[1] == "queued"]
 
 
 async def list_runs(

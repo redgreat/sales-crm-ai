@@ -57,6 +57,21 @@ def test_parse_json_compacts():
     assert '"b": [2, 3]' in parsed.text
 
 
+@pytest.mark.parametrize(
+    ("name", "content", "expected"),
+    [
+        ("note.txt", "客户记录", "客户记录"),
+        ("list.csv", "客户,阶段\nACME,续约\n", "客户 | 阶段"),
+        ("data.json", '{"customer":"ACME"}', '{"customer": "ACME"}'),
+    ],
+)
+def test_utf8_bom_is_not_part_of_content(name: str, content: str, expected: str):
+    parsed = parse_bytes(data=b"\xef\xbb\xbf" + content.encode("utf-8"), name=name)
+    assert parsed.encoding == "utf-8-sig"
+    assert parsed.text.startswith(expected)
+    assert "\ufeff" not in parsed.text
+
+
 def test_invalid_json_rejected():
     with pytest.raises(FileError, match="JSON 解析失败"):
         parse_bytes(data="{not json".encode("utf-8"), name="x.json")
@@ -72,6 +87,12 @@ def test_unsupported_type_rejected_without_fake_result():
 def test_binary_rejected():
     with pytest.raises(FileError, match="二进制"):
         parse_bytes(data=b"abc\x00\x01\x02", name="a.txt")
+
+
+@pytest.mark.parametrize("payload", [b"%PDF-1.7\nbody", b"PK\x03\x04archive"])
+def test_binary_signature_rejected_when_renamed_as_text(payload: bytes):
+    with pytest.raises(FileError, match="二进制"):
+        parse_bytes(data=payload, name="renamed.txt")
 
 
 def test_empty_file_rejected():
@@ -91,6 +112,13 @@ def test_truncation_flagged():
     assert parsed.truncated is True
     assert len(parsed.text) == 10
     assert "已截断" in parsed.summary()
+
+
+def test_truncation_limit_counts_encoded_bytes():
+    parsed = parse_bytes(data="中文".encode("utf-8"), name="note.txt", max_bytes=4)
+    assert parsed.truncated is True
+    assert parsed.text == "中"
+    assert len(parsed.text.encode("utf-8")) <= 4
 
 
 def test_blank_only_file_rejected():
@@ -185,6 +213,38 @@ async def test_parse_endpoint_rejects_empty_payload():
             headers={"x-sai-user-id": "u1", "x-sai-user-name": "tester"},
         )
     assert response.status_code == 422
+
+
+async def test_oversized_file_does_not_block_following_small_file():
+    """超限文件逐项失败，后续合法文件仍可解析。"""
+    import base64
+
+    import httpx
+
+    from app.api.main import create_app
+    from app.api.routes.files import REQUEST_MAX_BYTES
+    from app.config import Settings
+
+    settings = Settings(
+        environment="test",
+        database_url="postgresql://postgres@127.0.0.1:1/x",
+        auth={"service_key_id": "crm-ai", "service_secret": "test-secret"},
+    )
+    app = create_app(settings)
+    app.state.settings = settings
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/files/parse",
+            json={"files": [
+                {"name": "large.txt", "data_base64": base64.b64encode(b"x" * (REQUEST_MAX_BYTES + 1)).decode()},
+                {"name": "small.txt", "data_base64": base64.b64encode("正常文件".encode()).decode()},
+            ]},
+            headers={"x-sai-user-id": "u1", "x-sai-user-name": "tester"},
+        )
+    assert response.status_code == 200
+    assert [item["name"] for item in response.json()["parsed"]] == ["small.txt"]
+    assert [item["name"] for item in response.json()["failed"]] == ["large.txt"]
 
 
 # ------------------------------------------------------------------ 端点

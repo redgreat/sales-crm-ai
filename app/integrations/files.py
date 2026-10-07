@@ -7,9 +7,9 @@
 - 只处理**纯文本类**文件：txt / md / log / csv / json / yaml。
 - docx、pdf、xlsx 等二进制或复合文档**明确报错**，不留 stub 假结果——
   它们需要额外依赖与单独的解析质量验证，属于后续 POC，现在不能宣称支持。
-- 编码按 utf-8 → utf-8-sig → gb18030 依次尝试；仍失败则显式报错，
+- UTF-8 BOM 优先按 utf-8-sig 解码；否则按 utf-8 → gb18030 尝试；仍失败则显式报错，
   绝不静默替换乱码字符后当解析成功。
-- 超过体积上限按字符截断并标记 `truncated`，让调用方能如实提示"内容已截断"，
+- 超过体积上限按字节截断并标记 `truncated`，让调用方能如实提示"内容已截断"，
   而不是把半截内容当成完整材料送进模型。
 
 解析产物只作为**抽取/问答的输入文本**，本层不做任何写入、不产出候选。
@@ -28,9 +28,12 @@ SUPPORTED_TYPES: frozenset[str] = frozenset(
     {".txt", ".md", ".markdown", ".log", ".csv", ".json", ".yaml", ".yml"}
 )
 # 编码尝试顺序：中文 Windows 环境常见 gb18030，放在 utf-8 之后
-_ENCODINGS: tuple[str, ...] = ("utf-8", "utf-8-sig", "gb18030")
-# 默认体积上限（1MB 字符数）；超出即截断，不无限读入
+_ENCODINGS: tuple[str, ...] = ("utf-8", "gb18030")
+# 默认体积上限（1MB 字节）；超出即截断，不无限读入
 DEFAULT_MAX_BYTES = 1_048_576
+_BINARY_SIGNATURES: tuple[bytes, ...] = (
+    b"%PDF-", b"PK\x03\x04", b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff",
+)
 
 
 class FileError(RuntimeError):
@@ -74,6 +77,8 @@ def detect_type(*, name: str = "", content_type: str = "") -> str:
 
 
 def _decode(data: bytes) -> tuple[str, str]:
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data.decode("utf-8-sig"), "utf-8-sig"
     for encoding in _ENCODINGS:
         try:
             return data.decode(encoding), encoding
@@ -114,13 +119,18 @@ def parse_bytes(
             "不支持的文件类型"
             f"（仅支持 {', '.join(sorted(SUPPORTED_TYPES))}；docx/pdf/xlsx 等需单独 POC，暂不支持）"
         )
+    if data.startswith(_BINARY_SIGNATURES):
+        raise FileError("疑似二进制文件，不能按纯文本解析")
     if b"\x00" in data[:4096]:
         raise FileError("疑似二进制文件，不能按纯文本解析")
 
     raw, encoding = _decode(data)
-    truncated = len(raw) > max_bytes
+    if max_bytes <= 0:
+        raise FileError("文件解析上限必须大于 0")
+    truncated = len(data) > max_bytes
     if truncated:
-        raw = raw[:max_bytes]
+        # 已对完整文件验过编码；这里只忽略字节截断点处的不完整字符。
+        raw = data[:max_bytes].decode(encoding, errors="ignore")
 
     if file_type == ".csv":
         text = _render_csv(raw)
