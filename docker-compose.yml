@@ -1,0 +1,38 @@
+# sales-crm-ai 部署编排。
+# 镜像来自 GHCR（main 分支推送自动构建；标签：latest / sha-<短提交> / vX.Y.Z）：
+#   https://ghcr.io/redgreat/sales-crm-ai
+# 源码：https://github.com/redgreat/sales-crm-ai.git
+#
+# 快速部署：
+#   1. 准备配置：cp conf/config.yml.example conf/config.yml，填好 database_url 与模型凭据
+#      （密钥推荐用环境变量注入，优先级高于 config.yml，见下方 environment 注释）。
+#   2. 初始化库结构（显式执行，启动只校验不改库）：
+#        docker compose run --rm sales-crm-ai python scripts/init_db.py --apply
+#        docker compose run --rm sales-crm-ai python scripts/init_checkpoints.py --apply
+#   3. 启动：docker compose up -d
+#   4. 验证：curl -f http://127.0.0.1:8310/ready （schema/checkpoint/model 三项须 ok）
+#
+# 单容器同时运行 API 与 worker（uvicorn lifespan 受管，worker.enabled 控制）。
+# 数据库用外部 PostgreSQL（生产建议托管实例，如阿里云 RDS——库部署/备份由云托管负责）；
+# 如需临时本地库，用 `docker compose --profile local-db up -d` 额外拉起 postgres，
+# 并把 database_url 指向 postgres:5432。
+
+services:
+  sales-crm-ai:
+    image: ghcr.io/redgreat/sales-crm-ai:latest
+    container_name: sales-crm-ai
+    hostname: sales-crm-ai
+    restart: unless-stopped
+    ports:
+      - "8310:8310"
+    environment:
+      TZ: Asia/Shanghai
+      # 密钥类配置优先级高于 config.yml，推荐部署时用环境变量注入（密钥不落盘）：
+      #   SAI_MODEL_API_KEY          模型供应商 Key
+      #   SAI_CRM_SECRET             AI→CRM 服务签名密钥（与 CRM 端 AI_SERVICE_AUTH_SECRET 同值）
+      #   SAI_ASR_API_KEY            百炼录音识别
+      #   SAI_OCR_ACCESS_KEY_ID / SAI_OCR_ACCESS_KEY_SECRET      阿里云 OCR
+      #   SAI_OSS_ACCESS_KEY_ID / SAI_OSS_ACCESS_KEY_SECRET / SAI_OSS_ENDPOINT / SAI_OSS_BUCKET
+      SAI_CONFIG: /app/conf/config.yml
+    volumes:
+      - ./conf/config.yml:/app/conf/config.yml:ro

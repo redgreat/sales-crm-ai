@@ -47,7 +47,7 @@ P0 基线 → P1 裁剪骨架 → P2 可靠执行 → P3 最小多轮 → P4 CRM
 - [x] 2026-10-07 租约回收遵守 `max_attempts`：崩溃 worker 在最后一次尝试耗尽后转 failed、保留明确错误码，不再无限回队列；重试与终态失败的状态历史分别记 queued/failed。Run、会话、执行器和进程恢复组合回归 40 passed。
 - [x] 运行、图等待、候选和正式写入状态分开；模型调用不持长事务，故障不降级无状态图。（queued/running/waiting_input/succeeded/failed/cancelled；interrupt 后释放租约）
 
-验收目标：重启后继续可恢复阶段，旧执行者隔离，任务不丢；补齐故障矩阵与运行手册。原计划曾记录真实 PG 重启通过，本轮未复测且所引交接文件缺失，不作为全部恢复门槛通过的证明。
+验收目标：重启后继续可恢复阶段，旧执行者隔离，任务不丢；补齐故障矩阵与运行手册。原计划曾记录真实 PG 重启通过，本轮未复测且所引交接文件缺失，不作为全部恢复门槛通过的证明。**2026-10-07 用户决策（原开放项 B-1）**：正式环境用阿里云 RDS 托管，不做数据库部署/备份策略演练，部署级演练项关闭；进程级恢复证据（`test_p2_process_recovery.py`、`test_executor.py`）保留为 P2 证据。
 
 ## 5. P3：会话、短期记忆、追问和恢复（部分完成）
 
@@ -73,7 +73,7 @@ P0 基线 → P1 裁剪骨架 → P2 可靠执行 → P3 最小多轮 → P4 CRM
 - [x] V010 迁移版本冲突已解决（2026-10-01，用户授权 MCP 直接操作 zrcrm 库）：分支快进 origin/master 取回 V014-V017；冲突脚本定版 `V018__ai_agent_candidates.sql`（`confirmed_by`→`confirmed_by_id` 对齐实体，全幂等）；新增 `V019__work_tasks_extract.sql`。两版本均已在 zrcrm 库执行并登记 flyway history（rank 19/20，checksum 按 LineChecksum 算法核对，且 validate-on-migrate=false）。
 - [x] 双端事实查询契约已冻结（2026-10-01，见 需求第 13 节）：Java 新增 `GET /ai/integration/facts/{subjectType}/{subjectId}`（customer/lead/opportunity），删除旧 POST customer 专用端点；**修复 Python 签名 path 口径缺陷**（原签相对路径，Java 验签用完整 getRequestURI，必 401——现从 base_url 提取应用前缀）；`tests/test_p4_contract.py` 5 passed（MockTransport 验证方法/路径/签名重构/响应解析/401 透传）。
 - [x] 任务候选确认写入已切换正式 Service（2026-10-01）：`TaskService.createFromExtract` → **work_tasks 统一任务表**（source=EXTRACT，V019 加幂等键/客户锚点/候选关联三列），本人确认=OPEN、指派他人=PENDING_ACCEPT（正式指派权限 canManageRelation，弃用 AI 专用 R1/R2 判定），并发确认由幂等唯一索引兜底；`sales_task` 停止写入。
-- [ ] CRM Java 仅增加集成薄层：认证上下文、事实查询、Run 代理/结果拉取、候选导入；不再实现模型编排或记忆。（骨架符合；活动写入仍由集成服务事务内 Mapper 直插——CRM 无独立 ActivityService，活动管理入口属后续迭代，见需求第 13.2 节。）
+- [ ] CRM Java 仅增加集成薄层：认证上下文、事实查询、Run 代理/结果拉取、候选导入；不再实现模型编排或记忆。（骨架符合。**2026-10-07 更新**：`ActivityService` 已在 master 落地（page/create 手工入口）；AI `confirmRun` 写入 `sales_activity` 仍由集成服务事务内 Mapper 直插（幂等键防重），任务侧走 `TaskService.createFromExtract`——两条路径是否统一见开放项 C-3。另：Run 代理已支持 file_ref（CRM 侧校验归属/状态/版本/处理类型后透传，`createFileRun`）。）
 - [x] 冻结服务认证和最小用户授权凭据；Python 不直连 CRM 库，CRM 不暴露模型 Key。（签名方案双端逐字段一致；密钥经环境变量注入。）
 - [ ] 沟通/会议产生建议 → CRM 幂等导入候选 → 用户补齐/确认 → 正式活动/任务 Service；真实业务接口缺失显式补在 CRM，不造 Python 正式任务表。（任务侧闭环已具备；活动侧待 ActivityService 收敛。）
 - [x] 顺序重复导入查既有候选、先活动后任务及按原业务键查正式对象的基础代码已有。（不等于并发和故障恢复通过。）
@@ -81,7 +81,7 @@ P0 基线 → P1 裁剪骨架 → P2 可靠执行 → P3 最小多轮 → P4 CRM
 - [x] **测试用 H5 联调端（2026-10-02，`tests/h5/index.html` + `scripts/h5_server.py`，提交 `f73b5cd` 及后续改造）**：以生产 H5 形态覆盖 M-12 能力目录、M19 助手会话（缺参追问→补参→历史窗口）、M03/M20 草稿链（提交→轮询→导入→确认/忽略/失败重试）、M07 候选三视图。**登录不再粘贴 token**：页面用工号/密码登录，`scripts/h5_server.py` 在服务端完成密码授权后写 `.local/crm-token.txt`，并把 `/crm/**` 同源代理到 CRM 注入 token——同时绕过 CRM CORS 白名单只放 `localhost:81` 的限制（file:// 直开会被拦）。已验证：`/__session`、`/__login`（`ZR20050012`，token 有效期 3600s）、`/crm/ai/capabilities`、`GET/POST /crm/ai/candidates`、`POST /crm/ai/conversations` 均 200。**不等于**生产 H5 验收：无企微登录、未做浏览器级用例、不替代 P-MOBILE 真机验收。
 - [x] **真实联调首轮通过（2026-10-01，不需要 CRM JWT 的 HMAC 事实链路）**：CRM 应用本地启动（service_dev_ai@af2d6c3，dev 配置连真实 zrcrm 库，Flyway V018/V019 校验通过），`scripts/crm_facts_live_check.py` **9 passed**——真实签名、真实客户/线索/商机数据、数据范围 403、404 归一 found=false、未知类型 400、错密钥/nonce 重放 401。联调暴露并修复三处：StaffIdentityFilter 未豁免 integration 路径、HMAC 链路角色固定空数组/停用不拦（改为从 staff 表读真实身份）、对象不存在未归一 found=false。
 - [x] **2026-10-07 本地只读复测**：复用已运行的 Java :18080 与 AI :8310（AI `/ready` 200）；AI 当前配置签名访问不存在客户返回 200/`found=false`，相同 nonce 第二次请求与错误签名均返回 401。仅是已运行实例的非写入烟测，未核实该 Java 进程对应的构建分支，不替代上方 9 场景完整复测或正式业务写入验收。
-- [ ] 验证「正式提交成功但响应丢失」、重复确认、候选版本改变、无指派权限、来源撤权和跨用户查询。（**2026-10-02 部分闭合**：`tests/test_p4_draft_live.py` **3 passed**——真实 JWT（`ZR20050012`）+ 真实模型 + zrcrm 正式写入，覆盖建档草稿端到端写入、弱网重复确认幂等、同名客户拒绝并给「改为补增」提示；提交 `93dd082`。**仍开放**：响应丢失对账、候选/来源版本改变、无指派权限、来源撤权、跨用户查询，以及活动/任务侧的同等真实闭环。）
+- [ ] 验证「正式提交成功但响应丢失」、重复确认、候选版本改变、无指派权限、来源撤权和跨用户查询。（**2026-10-02 部分闭合**：`tests/test_p4_draft_live.py` **3 passed**——真实 JWT（`ZR20050012`）+ 真实模型 + zrcrm 正式写入，覆盖建档草稿端到端写入、弱网重复确认幂等、同名客户拒绝并给「改为补增」提示；提交 `93dd082`。**仍开放**：候选/来源版本改变、无指派权限、来源撤权、跨用户查询，以及活动/任务侧的同等真实闭环。**响应丢失对账已于 2026-10-07 闭合（原开放项 C-1）**：`createRun` 同键同内容幂等重放返回原 Run（异内容 409）、重复确认幂等返回原 formal_id——客户端重发原请求即得确定结果，无需专项回执接口。）
 
 验收：真实文字生成到正式业务写入闭环；Stub/模拟确认不算。记录涉及 CRM 仓库的分支、变更文件和联调版本，不整体合并旧 AI 分支。
 
@@ -200,7 +200,7 @@ OCR 看区域锚点、数字/日期及模糊/大图错误；ASR 看时间锚点�
 
 - [x] 对当前 DEV_SPEC 28 页逐项检查，结合后端 04/05/08 登记 AI 入口、冲突、缺项和建议；完成文档快照，不代表页面已修改。
 - [x] 产品/移动端负责人确定候选生命周期、批量及追踪任务、对话建档、工作手机录音、消息偏好、知识分享等 M 项；回填决定和版本。（**2026-10-01 复核产品版 V2.6（2026-09-30）**：M-01/02/04/05/06/07/08/09/11/12 已按后端口径确认；**M-03 用户确认必须实现，已于 2026-10-01 落地**（新增类 4 项：AI 侧 draft@1 图+注册表+目录透出，CRM 侧 V025+导入/确认写正式 Service；查询类 2 项映射现有 qa 族）；M-10 权限组合语义待定（AI 侧纵深防御不受影响）；遗留待确认见 需求第 11.5 节：M03 批量确认是否限同会议来源、知识权限组合语义、「丢弃无痕」措辞、生产 H5 仓库）
-- [ ] 确认实际 H5 代码仓库、企业微信登录、staff 映射及 CRM 代理契约；保留 PC 轻量入口，独立 Svelte 只作 dev/test 联调。（**2026-10-02 部分推进**：联调端形态已落地 `tests/h5/index.html`，覆盖 M-07 候选三视图 / M-12 能力目录 / M19 会话 / M03·M20 草稿链，登录改由 `scripts/h5_server.py` 服务端代取 token，详见第 6 节；**仍缺**：生产 H5 仓库、企微登录与 staff 映射、真机验收。）
+- [ ] 确认实际 H5 代码仓库、企业微信登录、staff 映射及 CRM 代理契约；保留 PC 轻量入口，独立 Svelte 只作 dev/test 联调。（**2026-10-02 部分推进**：联调端形态已落地 `tests/h5/index.html`，覆盖 M-07 候选三视图 / M-12 能力目录 / M19 会话 / M03·M20 草稿链，登录改由 `scripts/h5_server.py` 服务端代取 token，详见第 6 节。**2026-10-07 A-1 已确认（用户）**：H5 前端由移动端团队按 api-service 仓设计文档开发（提交 8c20dfbc）；后端底座已在 master——企微静默登录 `WecomLoginService`（code→CRM 自签会话 JWT）、userid→staff 映射走 identity_bindings（provider=WECOM）、H5 业务接口（6637296/0a5dd8e）；AI 经 CRM 代理。**仍缺**：H5 前端产出后的 page-id/路由契约冻结与真机验收。）
 - [ ] P4 冻结 page-id/capability/来源与对象版本/Run/会话/候选及 API 映射；稳定客户端请求键、选中项与版本成为确认契约，不静默按整批确认。
 - [ ] P3 补齐关闭/过期/窗口记忆、所有 resume 入口版本校验与历史撤权；移动端实现收起/离页/刷新恢复、对象切换和无证据/缺参/失败状态。
 - [ ] 接入 M03/M11/M15/M25 文字及候选核心链，先活动后逐项任务、明确逐项结果；录音/图片/文件按专项 POC 启用，排除工作手机自动采集。
@@ -254,7 +254,7 @@ OCR 看区域锚点、数字/日期及模糊/大图错误；ASR 看时间锚点�
 - V010 重号已收敛至 `V018__ai_agent_candidates.sql`（confirmed_by_id）、`V019__work_tasks_extract.sql`（customer_id/ai_candidate_id/idempotency_key 与部分唯一索引）；10-01 记录在 zrcrm 执行并登记 Flyway rank 19/20、核对 LineChecksum。
 - 该环境历史设置 validate-on-migrate=false，不是新环境推荐配置或跳过校验的授权。V025 为建档候选扩展（避让既有 V020–V024）；各环境部署须核实脚本与迁移历史，不能照搬手工登记。
 - 已解决的旧问题不再作为阻塞：GET/POST 事实接口不一致、V010 重号、最早 100 条历史、同会话固定请求键、生命周期入口遗漏、v9/v10 字符串版本排序。
-- **仍开放**：模板复用/许可证清单；跨仓库版本矩阵（生产 H5 仓库缺失）；全部恢复入口 state_version 与旧 checkpoint 升级；当前权限下完整历史/摘要处理；同名匹配/override 客户权限及对象状态；活动正式 Service；候选/来源/结果版本快照；负责人/活动时间默认值显式确认；审计/正式写入事务边界、响应丢失对账；活动/任务侧与建档同等级的真实闭环；OSS 生产凭据与真实上传→ASR 联调（开放项 B-4）；ASR/OCR→LLM 串联三层文本；真实 H5（企微登录/staff 映射）与增强输入闭环。（已闭合不再列为开放：确认勾选集合 `item_ids`、稳定客户端请求键、客户同名匹配走数据范围——见第 6 节 2026-10-02 记录；**P5 文件边界契约与 CRM 附件组件——见需求 12.5 与 2026-10-07 附件契约记录**。）
+- **仍开放**：模板复用/许可证清单；跨仓库版本矩阵（H5 前端待移动端团队产出）；全部恢复入口 state_version 与旧 checkpoint 升级；当前权限下完整历史/摘要处理；同名匹配/override 客户权限及对象状态；**活动确认写入与 ActivityService 统一（C-3：ActivityService 已存在 page/create，AI confirmRun 仍 Mapper 直插）**；候选/来源/结果版本快照；负责人/活动时间默认值显式确认；审计/正式写入事务边界；**来源对象撤权业务流（C-2：文件撤权链路已闭环，来源对象撤权未实现）**；活动/任务侧与建档同等级的真实闭环；OSS 生产凭据与真实上传→ASR 联调（环境类，用户部署时解决）；ASR/OCR→LLM 剩余细化（姓名/专名核对、用户最终文本持久化）；真实 H5（前端产出后）与增强输入闭环。（已闭合不再列为开放：确认勾选集合 `item_ids`、稳定客户端请求键、客户同名匹配走数据范围——见第 6 节 2026-10-02 记录；P5 文件边界契约与 CRM 附件组件——见需求 12.5；**响应丢失对账（C-1）——幂等重放覆盖，2026-10-07**；**识别→整理编排（D-2）——0005/enhanced_input/organize/Run 接入落地**；**生产 H5 形态（A-1）——api-service 设计文档 + 后端底座，2026-10-07**。）
 - CRM 测试必须走 Controller/Service 并断言合法样本确实创建正式对象且重复请求返回相同 ID；直接改库置 INVALID、只比 JSON 或允许全部写入失败，不算撤权/版本/闭环通过。
 
 ### 12.3 文档职责与清理记录

@@ -47,9 +47,12 @@ crm:
 # 启用但凭据缺失会直接拒绝启动，绝不回退为"假装识别成功"。
 #
 # 密钥两种给法（环境变量优先于本文件，推荐部署时用环境变量，密钥不落盘）：
+#   SAI_MODEL_API_KEY（model.api_key）
+#   SAI_CRM_SECRET（crm.secret，与 CRM 端 AI_SERVICE_AUTH_SECRET 同值）
 #   SAI_ASR_API_KEY / SAI_ASR_WORKSPACE_ID
 #   SAI_OCR_ACCESS_KEY_ID / SAI_OCR_ACCESS_KEY_SECRET
 #   SAI_OSS_ACCESS_KEY_ID / SAI_OSS_ACCESS_KEY_SECRET / SAI_OSS_ENDPOINT / SAI_OSS_BUCKET
+# 容器部署见仓库根 docker-compose.yml（镜像 ghcr.io/redgreat/sales-crm-ai）。
 
 # ASR 录音文件识别（阿里云百炼 DashScope）
 # 开通：百炼控制台开通服务 → 创建 API Key

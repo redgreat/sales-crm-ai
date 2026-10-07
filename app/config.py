@@ -152,6 +152,8 @@ class ApiSettings(BaseModel):
 # 也更贴近部署侧的密钥注入方式）。环境变量优先级**高于**配置文件：
 # 文件里留占位符、启动时由环境注入真实值，是推荐用法。
 _SECRET_ENV_OVERRIDES: dict[str, str] = {
+    "model.api_key": "SAI_MODEL_API_KEY",
+    "crm.secret": "SAI_CRM_SECRET",
     "asr.api_key": "SAI_ASR_API_KEY",
     "asr.workspace_id": "SAI_ASR_WORKSPACE_ID",
     "ocr.access_key_id": "SAI_OCR_ACCESS_KEY_ID",

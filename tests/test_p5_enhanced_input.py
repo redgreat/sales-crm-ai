@@ -142,6 +142,18 @@ def test_env_overrides_win_over_config_file(monkeypatch):
     assert settings.asr.api_key == "real-key"
 
 
+def test_crm_and_model_env_overrides(monkeypatch):
+    """crm.secret 与 model.api_key 支持环境变量注入（容器部署密钥不落盘）。"""
+    monkeypatch.setenv("SAI_CRM_SECRET", "env-crm-secret")
+    monkeypatch.setenv("SAI_MODEL_API_KEY", "env-model-key")
+    settings = _settings(
+        crm={"base_url": "http://127.0.0.1:8080/api/v1/salescrm", "secret": "占位符-请替换"},
+        model={"provider": "openai_compatible", "base_url": "https://m.example", "name": "m1", "api_key": "占位符-请替换"},
+    )
+    assert settings.crm.secret == "env-crm-secret"
+    assert settings.model.api_key == "env-model-key"
+
+
 # ---------------------------------------------------------------- ASR
 
 
