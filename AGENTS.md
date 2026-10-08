@@ -52,8 +52,8 @@
 ## CI/CD
 
 - 工作流：`.github/workflows/ci.yml`
-- 触发：push 到 main 或 v* 标签、PR、`workflow_dispatch` 手动发起
-- 流程：多阶段 Docker 构建（前端 Node.js → Python 运行时）→ 推送 GHCR 与 Quay
+- 触发：测试随 push 到 main / PR / `workflow_dispatch` 运行；镜像构建仅在推送 `v*` 标签或手动发起时执行
+- 流程：多阶段 Docker 构建（前端 Node.js → Python 运行时）→ 推送 GHCR 与 Quay（仅 v* 标签 / 手动触发）
 - 镜像：`ghcr.io/redgreat/sales-crm-ai`、`quay.io/zrcrm/sales-crm-ai`（secrets：`QUAY_USERNAME`/`QUAY_PASSWORD`）
 - 发布脚本：`scripts\dockerbuild.ps1` / `scripts/dockerbuild.sh`（自动计算下一个 `v*` 标签并推送，触发 CI 发布镜像）
 - 本地测试：`docker build -t sales-crm-ai .`

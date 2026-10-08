@@ -1,5 +1,5 @@
 # sales-crm-ai 部署编排。
-# 镜像来自 Quay（main 分支推送自动构建；标签：latest / sha-<短提交> / vX.Y.Z）：
+# 镜像来自 Quay（推送 v* 标签由 CI 自动构建；标签：latest / sha-<短提交> / vX.Y.Z）：
 #   https://quay.io/zrcrm/sales-crm-ai
 # 源码：https://github.com/redgreat/sales-crm-ai.git
 #

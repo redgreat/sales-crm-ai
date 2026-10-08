@@ -17,9 +17,10 @@
 - 联调前端 `frontend/`（Svelte 5 + Tailwind v4 + shadcn-svelte）：沟通抽取、会话多轮补参、
   Run 查询；未实现能力明确标记。浏览器不持密钥——前端经 `/playground/api` 开发代理访问，
   服务端注入固定联调身份并签名；仅 dev/test 且 `api.playground.enabled` 时生效，生产 404 且拒绝启动。
-- CI：`.github/workflows/ci.yml` —— 多阶段 Docker 构建（前端编译 + Python 运行时）→ 推送 GHCR 与 Quay
+- CI：`.github/workflows/ci.yml` —— 测试随 push 到 main / PR / `workflow_dispatch` 运行；
+  多阶段 Docker 构建（前端编译 + Python 运行时）→ 推送 GHCR 与 Quay **仅在推送 `v*` 标签或手动触发时执行**
   （`ghcr.io/<owner>/<repo>`、`quay.io/zrcrm/sales-crm-ai`：latest / sha / 语义版本 tag；
-  触发：push 到 main、v* 标签、PR、`workflow_dispatch` 手动；Quay 需配置 `QUAY_USERNAME`/`QUAY_PASSWORD` secrets）。
+  Quay 需配置 `QUAY_USERNAME`/`QUAY_PASSWORD` secrets）。
 - 镜像发布：`scripts\dockerbuild.ps1`（或 bash 版 `scripts/dockerbuild.sh`）自动计算下一个 `v*` 标签
   并推送，由 CI 完成构建与 GHCR + Quay 双仓库发布。
 - 测试命令：`.venv\Scripts\python -m pytest tests/ -v`（conftest 自动在 `.local/pg-test` 起临时
