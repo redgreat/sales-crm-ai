@@ -53,6 +53,6 @@
 
 - 工作流：`.github/workflows/ci.yml`
 - 触发：push 到 main 或 v* 标签
-- 流程：多阶段 Docker 构建（前端 Node.js → Python 运行时）→ 推送 GHCR
-- 镜像：`ghcr.io/redgreat/sales-crm-ai`
+- 流程：多阶段 Docker 构建（前端 Node.js → Python 运行时）→ 推送 GHCR 与 Quay
+- 镜像：`ghcr.io/redgreat/sales-crm-ai`、`quay.io/zrcrm/sales-crm-ai`（secrets：`QUAY_USERNAME`/`QUAY_PASSWORD`）
 - 本地测试：`docker build -t sales-crm-ai .`
