@@ -238,4 +238,7 @@ scripts/*
 !scripts/crm_facts_live_check.py
 # h5_server.py 不含任何密钥（凭据走环境变量 / .local/identity.json），可入库
 !scripts/h5_server.py
+# 镜像发布脚本：自动打 v* 标签触发 CI 构建发布，不含密钥
+!scripts/dockerbuild.ps1
+!scripts/dockerbuild.sh
 .archify/

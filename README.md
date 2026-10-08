@@ -19,7 +19,9 @@
   服务端注入固定联调身份并签名；仅 dev/test 且 `api.playground.enabled` 时生效，生产 404 且拒绝启动。
 - CI：`.github/workflows/ci.yml` —— 多阶段 Docker 构建（前端编译 + Python 运行时）→ 推送 GHCR 与 Quay
   （`ghcr.io/<owner>/<repo>`、`quay.io/zrcrm/sales-crm-ai`：latest / sha / 语义版本 tag；
-  Quay 需配置 `QUAY_USERNAME`/`QUAY_PASSWORD` secrets）。
+  触发：push 到 main、v* 标签、PR、`workflow_dispatch` 手动；Quay 需配置 `QUAY_USERNAME`/`QUAY_PASSWORD` secrets）。
+- 镜像发布：`scripts\dockerbuild.ps1`（或 bash 版 `scripts/dockerbuild.sh`）自动计算下一个 `v*` 标签
+  并推送，由 CI 完成构建与 GHCR + Quay 双仓库发布。
 - 测试命令：`.venv\Scripts\python -m pytest tests/ -v`（conftest 自动在 `.local/pg-test` 起临时
   PostgreSQL；找不到 initdb 时真实库测试显式 skip，不伪造通过）。
 - 快速开始：复制 `conf/config.yml.example` 为 `conf/config.yml` → `scripts\init_db.py --apply` →

@@ -1,6 +1,6 @@
 # sales-crm-ai 部署编排。
-# 镜像来自 GHCR（main 分支推送自动构建；标签：latest / sha-<短提交> / vX.Y.Z）：
-#   https://ghcr.io/redgreat/sales-crm-ai
+# 镜像来自 Quay（main 分支推送自动构建；标签：latest / sha-<短提交> / vX.Y.Z）：
+#   https://quay.io/zrcrm/sales-crm-ai
 # 源码：https://github.com/redgreat/sales-crm-ai.git
 #
 # 快速部署：
@@ -19,7 +19,7 @@
 
 services:
   sales-crm-ai:
-    image: ghcr.io/redgreat/sales-crm-ai:latest
+    image: quay.io/zrcrm/sales-crm-ai:latest
     container_name: sales-crm-ai
     hostname: sales-crm-ai
     restart: unless-stopped
