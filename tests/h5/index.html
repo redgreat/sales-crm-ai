@@ -49,6 +49,9 @@
   .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
   .chip { border:1px solid var(--brand); color:var(--brand); border-radius:14px; padding:4px 10px; font-size:12px; cursor:pointer; background:#fff; }
   .chip.active { background:var(--brand); color:#fff; }
+  .pager { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:10px; font-size:12px; color:#595959; }
+  .pager button { width:auto; margin:0; padding:5px 10px; }
+  #researchResult { white-space:pre-wrap; overflow-wrap:anywhere; max-height:240px; overflow:auto; }
 </style>
 </head>
 <body>
@@ -121,8 +124,14 @@
 任务：电话回访
 2026-10-08
 负责人：王五</textarea>
-    <button onclick="createAndImport()">提交 → 等待结果 → 导入候选</button>
+    <button id="submitDraft" onclick="createAndImport()">提交 → 等待结果 → 导入候选</button>
     <div id="draftResult"></div>
+    <div class="row" style="margin-top:8px">
+      <input id="researchCompanyName" placeholder="企业名称">
+      <select id="researchProvider" aria-label="查询来源"><option value="bocha">博查</option><option value="qichacha">企查查</option></select>
+    </div>
+    <button class="ghost" onclick="researchCompany()">查询企业公开信息</button>
+    <div id="researchResult" class="meta"></div>
     <div class="log" id="draftLog"></div>
   </section>
 
@@ -133,9 +142,10 @@
       <span class="chip active" data-status="PENDING_CONFIRM" onclick="switchView(this)">待确认</span>
       <span class="chip" data-status="CONFIRMED" onclick="switchView(this)">已确认</span>
       <span class="chip" data-status="" onclick="switchView(this)">全部</span>
-      <span class="chip" data-status="FAILED" onclick="switchView(this)">写入失败</span>
+      <span class="chip" data-status="WRITE_FAILED" onclick="switchView(this)">写入失败</span>
     </div>
     <div id="candList" class="meta">—</div>
+    <div id="candPager" class="pager"></div>
   </section>
 </div>
 
@@ -144,8 +154,11 @@ const $ = (id) => document.getElementById(id);
 const LS_USER = 'ry-h5-user';
 const chatKey = (username) => `ry-h5-chat:${username}`;
 // 全部请求走同源 /crm/**（由 scripts/h5_server.py 代理到 CRM 并注入 token）
-let STATE = { base: '/crm', conversationId: null, currentCapability: 'communication.extract', viewStatus: 'PENDING_CONFIRM', username: '', password: '', lastCandidate: null, pendingStateVersion: null, sending: false, pendingSend: null };
+let STATE = { base: '/crm', conversationId: null, currentCapability: 'communication.extract', viewStatus: 'PENDING_CONFIRM', candidatePage: 1, candidates: [], importedCandidates: [], customerReturn: null, createdCustomerId: null, pendingRun: null, username: '', password: '', pendingStateVersion: null, sending: false, pendingSend: null };
 let RELOGIN_TRIED = false;
+const CANDIDATE_PAGE_SIZE = 8;
+const runTimeCache = new Map();
+let candidateLoadSeq = 0;
 
 function log(id, text) { const el = $(id); el.textContent = (el.textContent ? el.textContent + '\n' : '') + new Date().toLocaleTimeString() + ' ' + text; el.scrollTop = el.scrollHeight; }
 
@@ -153,6 +166,16 @@ function fmtRemaining(sec) {
   if (!sec) return '已过期';
   const m = Math.floor(sec / 60), s = sec % 60;
   return m > 0 ? `${m} 分 ${s} 秒` : `${s} 秒`;
+}
+
+function fmtTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 }
 
 async function api(method, path, body) {
@@ -296,6 +319,26 @@ function pickCap(el) {
   document.querySelectorAll('#capChips .chip').forEach(c => c.classList.toggle('active', c === el));
 }
 
+async function researchCompany() {
+  const name = $('researchCompanyName').value.trim();
+  const target = $('researchResult');
+  if (name.length < 2) { target.textContent = '请输入完整企业名称'; return; }
+  target.textContent = '查询中…';
+  try {
+    const r = await api('POST', '/ai/research/company', { company_name: name, provider: $('researchProvider').value });
+    if (!r.ok) { target.textContent = r.body?.error?.message || r.body?.errorMessage || r.body?.message || '查询不可用，请检查 MCP 配置'; return; }
+    target.textContent = `${r.body?.text || '未找到公开资料'}\n未核实，不会自动写入 CRM。`;
+    for (const url of r.body?.sources || []) {
+      if (!/^https?:\/\//.test(url)) continue;
+      const link = document.createElement('a');
+      link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      link.textContent = url;
+      link.style.display = 'block';
+      target.appendChild(link);
+    }
+  } catch { target.textContent = '查询服务暂不可达'; }
+}
+
 // ---------- M19 助手 ----------
 
 async function newConversation() {
@@ -392,54 +435,147 @@ function pollRun(runId, onSettled, intervalMs = 3000, maxWaitMs = 120000) {
 // ---------- M03/M20 草稿 ----------
 
 async function createAndImport() {
+  const submit = $('submitDraft');
+  if (submit.disabled) return;
   const text = $('draftInput').value.trim();
+  if (!text) return;
+  const capability = STATE.currentCapability;
+  submit.disabled = true;
   const box = $('draftResult');
   box.innerHTML = '<div class="meta">提交中…</div>';
   $('draftLog').textContent = '';
-  const r = await api('POST', '/ai/runs', { capability: STATE.currentCapability, text });
-  if (!r.ok) { box.innerHTML = `<div class="card">❌ 创建失败 ${JSON.stringify(r.body).slice(0, 160)}</div>`; return; }
+  const r = await api('POST', '/ai/runs', {
+    capability, text, client_request_key: crypto.randomUUID()
+  });
+  if (!r.ok) { box.innerHTML = `<div class="card">❌ 创建失败 ${JSON.stringify(r.body).slice(0, 160)}</div>`; submit.disabled = false; return; }
   const runId = r.body.run_id;
   box.innerHTML = `<div class="card">Run ${runId.slice(0, 8)}… ${pill(r.body.status, 'run')} <span class="meta">等待 AI 执行（真实模型约 20-25s）</span></div>`;
-  pollRun(runId, async (run) => {
-    if (run.status !== 'succeeded') {
-      box.innerHTML = `<div class="card">Run ${pill(run.status, run.status === 'failed' ? 'err' : 'warn')} ${run.error ? JSON.stringify(run.error).slice(0, 140) : ''}</div>`;
-      return;
-    }
-    const isDraft = STATE.currentCapability.endsWith('.draft');
-    const imp = await api('POST', `/ai/runs/${runId}/${isDraft ? 'import-draft' : 'import'}`);
-    if (!imp.ok) { box.innerHTML = `<div class="card">导入失败 ${imp.status} ${JSON.stringify(imp.body).slice(0, 140)}</div>`; log('draftLog', imp.status + ' ' + JSON.stringify(imp.body)); return; }
-    renderCandidate(imp.body);
-    switchView($('viewChips').querySelector('.active'));
-  });
+  pollRun(runId, run => handleDraftRun(run, capability));
 }
 
-function renderCandidate(c) {
-  STATE.lastCandidate = c;
-  const isDraft = c.draft_payload !== undefined;
+async function handleDraftRun(run, capability) {
+  const box = $('draftResult');
+  const submit = $('submitDraft');
+  if (!run || run.status === 'waiting_input') {
+    await showDraftPending(run?.run_id, capability);
+    return;
+  }
+  submit.disabled = false;
+  if (run.status !== 'succeeded') {
+    box.innerHTML = `<div class="card">Run ${pill(run.status, run.status === 'failed' ? 'err' : 'warn')} ${run.error ? JSON.stringify(run.error).slice(0, 140) : ''}</div>`;
+    return;
+  }
+  const runId = run.run_id;
+  runTimeCache.set(runId, run.created_at || null);
+  const isDraft = capability.endsWith('.draft');
+  const imp = await api('POST', `/ai/runs/${runId}/${isDraft ? 'import-draft' : 'import'}`);
+  if (!imp.ok) { box.innerHTML = `<div class="card">导入失败 ${imp.status} ${JSON.stringify(imp.body).slice(0, 140)}</div>`; log('draftLog', imp.status + ' ' + JSON.stringify(imp.body)); return; }
+  const imported = isDraft ? [imp.body] : imp.body.items;
+  if (!Array.isArray(imported)) {
+    box.textContent = '导入返回缺少候选列表';
+    log('draftLog', JSON.stringify(imp.body).slice(0, 220));
+    return;
+  }
+  STATE.importedCandidates = imported;
+  renderImportedCandidates();
+  switchView($('viewChips').querySelector('.active'));
+}
+
+async function showDraftPending(runId, capability) {
+  if (!runId) { $('draftResult').textContent = 'Run 等待补充信息，请刷新后重试'; $('submitDraft').disabled = false; return; }
+  const r = await api('GET', `/ai/runs/${runId}/pending`);
+  if (!r.ok || !r.body.waiting || r.body.state_version == null) {
+    $('draftResult').textContent = '无法读取待补信息，请稍后重试';
+    $('submitDraft').disabled = false;
+    return;
+  }
+  STATE.pendingRun = { runId, capability, stateVersion: r.body.state_version, questions: r.body.questions || [] };
+  const optionSources = {
+    customer_type: ['/customers/types', null],
+    region: ['/dictionaries/children?parentCode=REGION', null],
+    biz_line: ['/dictionaries/children?parentCode=BIZ_LINE', null],
+  };
+  const options = {};
+  await Promise.all(STATE.pendingRun.questions.filter(q => optionSources[q.field]).map(async q => {
+    const [path, key] = optionSources[q.field];
+    try {
+      const response = await api('GET', path);
+      const items = key ? response.body?.[key] : response.body;
+      options[q.field] = response.ok && Array.isArray(items) ? items.filter(item => item.value && item.label) : [];
+    } catch { options[q.field] = []; }
+  }));
+  Object.values(options).forEach(items => {
+    const counts = items.reduce((acc, item) => (acc[item.label] = (acc[item.label] || 0) + 1, acc), {});
+    items.forEach(item => { item.displayLabel = counts[item.label] > 1 ? `${item.label} (${item.value})` : item.label; });
+  });
+  $('draftResult').innerHTML = `<div class="card"><b>请补充以下信息</b>
+    ${STATE.pendingRun.questions.map((q, i) => `<label class="meta" style="display:block;margin-top:8px">${escapeHtml(q.label || q.field)}
+      ${optionSources[q.field] ? `<select id="pendingField${i}" data-field="${escapeHtml(q.field)}" ${options[q.field]?.length ? '' : 'disabled'}><option value="">${options[q.field]?.length ? '请选择' : 'CRM 选项加载失败，请刷新重试'}</option>${(options[q.field] || []).map(item => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.displayLabel)}</option>`).join('')}</select>` : `<input id="pendingField${i}" data-field="${escapeHtml(q.field)}" placeholder="${escapeHtml(q.label || q.field)}">`}</label>`).join('')}
+    <button onclick="resumePendingRun()">提交补充信息</button></div>`;
+}
+
+async function resumePendingRun() {
+  const pending = STATE.pendingRun;
+  if (!pending) return;
+  const fields = {};
+  pending.questions.forEach((q, i) => {
+    const value = ($(`pendingField${i}`)?.value || '').trim();
+    if (value) fields[q.field] = value;
+  });
+  if (!Object.keys(fields).length) return;
+  const values = pending.capability.endsWith('.draft') ? { fields } : fields;
+  const r = await api('POST', `/ai/runs/${pending.runId}/resume`, { state_version: pending.stateVersion, values });
+  if (!r.ok) { log('draftLog', '补充失败 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 160)); return; }
+  STATE.pendingRun = null;
+  $('draftResult').textContent = '补充信息已提交，等待 AI 继续处理…';
+  pollRun(pending.runId, run => handleDraftRun(run, pending.capability));
+}
+
+function renderImportedCandidates() {
+  const cards = STATE.importedCandidates.length
+    ? STATE.importedCandidates.map(renderCandidateCard).join('')
+    : '<div class="meta">本次 Run 没有生成候选</div>';
+  const continuation = STATE.customerReturn && STATE.createdCustomerId
+    ? `<div class="card">客户已创建（${escapeHtml(STATE.createdCustomerId)}），原候选尚未写入。
+      <button onclick="confirmOriginalWithNewCustomer()">使用新客户确认原候选</button></div>` : '';
+  $('draftResult').innerHTML = cards + continuation;
+}
+
+function renderCandidateCard(c) {
+  const isDraft = ['CUSTOMER', 'CONTACT', 'LEAD', 'OPPORTUNITY'].includes(c.candidate_type);
+  const unmatched = !isDraft && c.match_status !== 'MATCHED';
   const fields = (() => { try { return JSON.parse(c.draft_payload || '{}').fields || {}; } catch { return {}; } })();
-  $('draftResult').innerHTML = `
+  return `
     <div class="card">
       <b>${c.title || c.candidate_type}</b> ${pill(c.candidate_type, 'run')} ${statusPill(c.status, c.write_status)}
       <div class="meta">候选 ${c.id} · 匹配 ${c.match_status}${c.customer_id ? ' · 客户 ' + c.customer_id : ''}</div>
+      ${c.customer_name_hint ? `<div class="meta">AI 识别客户：${escapeHtml(c.customer_name_hint)}</div>` : ''}
+      ${unmatched ? `<div class="meta" style="color:var(--warn)">当前权限范围内未匹配到该客户，请先核对名称或新建客户；不会自动创建。</div>
+        <button class="mini ghost" onclick="startCustomerDraft('${c.id}')">新建客户草稿</button>` : ''}
+      <div class="meta">${c.created_at ? '候选创建' : 'Run 创建'}：${fmtTime(c.created_at || runTimeCache.get(c.run_id)) || '时间不可用'}${c.due_at ? ' · 截止：' + fmtTime(c.due_at) : ''}${c.occurred_at ? ' · 发生：' + fmtTime(c.occurred_at) : ''}</div>
       ${Object.keys(fields).length ? `<div class="meta">草稿字段：${Object.entries(fields).map(([k, v]) => k + '=' + v).join('  ')}</div>` : ''}
       ${c.match_hint ? `<div class="meta" style="color:var(--warn)">⚠ ${c.match_hint}</div>` : ''}
       ${c.write_error ? `<div class="meta" style="color:var(--err)">✗ ${c.write_error}</div>` : ''}
       ${c.formal_id ? `<div class="meta" style="color:var(--ok)">✔ 正式对象 ${c.formal_id}</div>` : ''}
       <div class="row" style="margin-top:8px">
-        <input id="ovr_${c.id}" placeholder='确认覆盖项 JSON（可空），如 {"customer_type":"ORG"}'>
+        <input id="ovr_${c.id}" placeholder='${unmatched ? '已有客户 ID：{"customer_id":"CU..."}' : '确认覆盖项 JSON（可空）'}'>
         <button class="mini" onclick="confirmCand('${c.id}')">${isDraft ? '确认写入' : '确认'}</button>
         <button class="mini ghost" onclick="ignoreCand('${c.id}')">忽略</button>
       </div>
-      ${c.run_id ? `<button class="mini ghost" style="margin-top:6px" onclick="retryRun('${c.run_id}')">写入失败重试（原幂等键）</button>` : ''}
     </div>`;
 }
 
 async function confirmCand(id) {
-  const c = STATE.lastCandidate || {};
-  const isDraft = c.id === id ? (c.draft_payload !== undefined) : String(c.candidate_type || '').match(/^(CUSTOMER|CONTACT|LEAD|OPPORTUNITY)$/) !== null;
+  const c = STATE.importedCandidates.find(item => item.id === id);
+  if (!c) { log('draftLog', '候选已变化，请重新导入'); return; }
+  const isDraft = ['CUSTOMER', 'CONTACT', 'LEAD', 'OPPORTUNITY'].includes(c.candidate_type);
   let overrides = {};
   const raw = ($('ovr_' + id) || {}).value;
   if (raw && raw.trim()) { try { overrides = JSON.parse(raw); } catch { alert('覆盖项不是合法 JSON'); return; } }
+  if (!isDraft && c.match_status !== 'MATCHED' && !overrides.customer_id) {
+    log('draftLog', `已识别客户“${c.customer_name_hint || '未知'}”，但 CRM 未匹配。请先新建客户，或填入已有客户 ID 后确认。`);
+    return;
+  }
   // 活动/任务候选按 Run 维度批量确认（CRM 端点 /ai/runs/{runId}/confirm）；建档候选按候选 id 单个确认
   const runId = c.run_id || c.runId || id;
   const target = isDraft ? `/ai/candidates/${id}/confirm-draft` : `/ai/runs/${runId}/confirm`;
@@ -448,10 +584,41 @@ async function confirmCand(id) {
   const r = await api('POST', target, isDraft ? overrides : { item_ids: [itemId], items: [Object.assign({ item_id: itemId }, overrides)] });
   if (!r.ok) { log('draftLog', '确认失败 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 160)); return; }
   const results = r.body.results || [r.body];
-  const first = results[0] || {};
-  log('draftLog', '确认返回：' + JSON.stringify(first).slice(0, 220));
-  renderCandidate(Object.assign({}, first, { id: first.id || id }));
+  const confirmed = results.find(item => item.id === id || item.item_id === itemId) || results[0] || {};
+  log('draftLog', '确认返回：' + JSON.stringify(confirmed).slice(0, 220));
+  STATE.importedCandidates = STATE.importedCandidates.map(item => item.id === id ? Object.assign({}, item, confirmed) : item);
+  if (isDraft && c.candidate_type === 'CUSTOMER' && confirmed.write_status === 'WRITTEN' && STATE.customerReturn) {
+    const payload = (() => { try { return JSON.parse(confirmed.draft_payload || '{}'); } catch { return {}; } })();
+    STATE.createdCustomerId = confirmed.formal_id || confirmed.customer_id || payload.formal_id || null;
+  }
+  renderImportedCandidates();
   switchView($('viewChips').querySelector('.active'));
+}
+
+function startCustomerDraft(id) {
+  const c = STATE.importedCandidates.find(item => item.id === id) || STATE.candidates.find(item => item.id === id);
+  if (!c || !c.customer_name_hint) { log('draftLog', '候选没有可用客户名称，请手工填写客户草稿'); return; }
+  STATE.customerReturn = { runId: c.run_id, itemId: c.item_id, candidateId: c.id };
+  STATE.createdCustomerId = null;
+  STATE.currentCapability = 'customer.draft';
+  document.querySelectorAll('#capChips .chip').forEach(chip => chip.classList.toggle('active', chip.dataset.cap === 'customer.draft'));
+  $('draftInput').value = `客户名称：${c.customer_name_hint}`;
+  $('draftResult').textContent = `已准备“${c.customer_name_hint}”的客户草稿。提交后 AI 会追问客户类型、经营区域和业务线；本人确认前不会创建客户。`;
+  $('secDraft').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function confirmOriginalWithNewCustomer() {
+  const original = STATE.customerReturn;
+  const customerId = STATE.createdCustomerId;
+  if (!original || !customerId) return;
+  const r = await api('POST', `/ai/runs/${original.runId}/confirm`, {
+    item_ids: [original.itemId], items: [{ item_id: original.itemId, customer_id: customerId }]
+  });
+  if (!r.ok) { log('draftLog', '原候选确认失败 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 160)); return; }
+  const result = (r.body.results || []).find(item => item.id === original.candidateId || item.item_id === original.itemId);
+  log('draftLog', '原候选确认：' + JSON.stringify(result || r.body).slice(0, 220));
+  if (result?.write_status === 'WRITTEN') { STATE.customerReturn = null; STATE.createdCustomerId = null; renderImportedCandidates(); }
+  loadCandidates();
 }
 
 async function ignoreCand(id) {
@@ -460,40 +627,85 @@ async function ignoreCand(id) {
   switchView($('viewChips').querySelector('.active'));
 }
 
-async function retryRun(runId) {
-  const r = await api('POST', `/ai/runs/${runId}/retry`);
-  log('draftLog', '重试 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 140));
-}
-
 // ---------- 候选三视图 ----------
 
 function switchView(el) {
   document.querySelectorAll('#viewChips .chip').forEach(c => c.classList.toggle('active', c === el));
   STATE.viewStatus = el.dataset.status || '';
+  STATE.candidatePage = 1;
   loadCandidates();
 }
 
 async function loadCandidates() {
-  const q = STATE.viewStatus ? `?status=${STATE.viewStatus}` : '';
-  const r = await api('GET', '/ai/candidates' + q);
-  if (!Array.isArray(r.body)) { $('candList').textContent = JSON.stringify(r.body).slice(0, 140); return; }
-  if (!r.body.length) { $('candList').textContent = '（空）'; return; }
-  $('candList').innerHTML = r.body.map(c => `
+  const seq = ++candidateLoadSeq;
+  const r = await api('GET', '/ai/candidates');
+  if (seq !== candidateLoadSeq) return;
+  if (!Array.isArray(r.body)) {
+    $('candList').textContent = JSON.stringify(r.body).slice(0, 140);
+    $('candPager').textContent = '';
+    return;
+  }
+  STATE.candidates = r.body
+    .filter(c => STATE.viewStatus === 'WRITE_FAILED' ? c.write_status === 'FAILED'
+      : !STATE.viewStatus || c.status === STATE.viewStatus)
+    .sort((a, b) => (Number(b.id?.replace(/\D/g, '')) || 0) - (Number(a.id?.replace(/\D/g, '')) || 0));
+  renderCandidatePage(seq);
+}
+
+function changeCandidatePage(delta) {
+  STATE.candidatePage += delta;
+  renderCandidatePage(candidateLoadSeq);
+}
+
+function renderCandidatePage(seq) {
+  const total = STATE.candidates.length;
+  const pages = Math.max(1, Math.ceil(total / CANDIDATE_PAGE_SIZE));
+  STATE.candidatePage = Math.min(Math.max(1, STATE.candidatePage), pages);
+  if (!total) {
+    $('candList').textContent = '（空）';
+    $('candPager').textContent = '';
+    return;
+  }
+  const start = (STATE.candidatePage - 1) * CANDIDATE_PAGE_SIZE;
+  const visible = STATE.candidates.slice(start, start + CANDIDATE_PAGE_SIZE);
+  $('candList').innerHTML = visible.map(c => `
     <div class="card">
       <b>${c.title || c.candidate_type}</b> ${pill(c.candidate_type, 'run')} ${statusPill(c.status, c.write_status)}
       <div class="meta">${c.id} · 匹配 ${c.match_status}${c.write_error ? ' · ' + c.write_error : ''}
       ${c.formal_activity_id || c.formal_task_id ? ' · 正式 ' + (c.formal_activity_id || c.formal_task_id) : ''}</div>
+      ${c.customer_name_hint ? `<div class="meta">AI 识别客户：${escapeHtml(c.customer_name_hint)}</div>` : ''}
+      <div class="meta">${c.created_at ? '候选创建' : 'Run 创建'}：${fmtTime(c.created_at || runTimeCache.get(c.run_id)) || (runTimeCache.has(c.run_id) ? '时间不可用' : '读取中')}</div>
+      ${c.due_at || c.occurred_at ? `<div class="meta">${c.due_at ? '截止：' + fmtTime(c.due_at) : '发生：' + fmtTime(c.occurred_at)}</div>` : ''}
+      ${['ACTIVITY', 'TASK'].includes(c.candidate_type) && c.match_status !== 'MATCHED' ? `<div class="meta" style="color:var(--warn)">当前权限范围未匹配，请核对名称或新建客户。</div><button class="mini ghost" onclick="startCustomerDraft('${c.id}')">新建客户草稿</button>` : ''}
       ${c.status === 'PENDING_CONFIRM' ? `<button class="mini" onclick="confirmFromList('${c.id}', '${c.run_id || ''}', '${c.item_id || ''}', ${c.candidate_type === 'CUSTOMER' || c.candidate_type === 'CONTACT' || c.candidate_type === 'LEAD' || c.candidate_type === 'OPPORTUNITY'})">确认</button>
       <button class="mini ghost" onclick="ignoreCand('${c.id}')">忽略</button>` : ''}
     </div>`).join('');
+  $('candPager').innerHTML = `<button class="ghost" onclick="changeCandidatePage(-1)" ${STATE.candidatePage === 1 ? 'disabled' : ''}>上一页</button>
+    <span>${STATE.candidatePage} / ${pages} · 共 ${total} 条</span>
+    <button class="ghost" onclick="changeCandidatePage(1)" ${STATE.candidatePage === pages ? 'disabled' : ''}>下一页</button>`;
+  const missingRuns = [...new Set(visible.filter(c => !c.created_at && c.run_id && !runTimeCache.has(c.run_id)).map(c => c.run_id))];
+  if (missingRuns.length) {
+    Promise.all(missingRuns.map(async runId => {
+      try {
+        const r = await api('GET', `/ai/runs/${runId}`);
+        runTimeCache.set(runId, r.ok ? r.body.created_at || null : null);
+      } catch { runTimeCache.set(runId, null); }
+    })).then(() => { if (seq === candidateLoadSeq) renderCandidatePage(seq); });
+  }
 }
 
 async function confirmFromList(id, runId, itemId, isDraft) {
+  const candidate = STATE.candidates.find(item => item.id === id);
+  if (!isDraft && candidate?.match_status !== 'MATCHED') {
+    log('draftLog', `已识别客户“${candidate?.customer_name_hint || '未知'}”，但 CRM 未匹配。请先新建客户草稿。`);
+    $('secDraft').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
   const target = isDraft
     ? `/ai/candidates/${id}/confirm-draft`
     : `/ai/runs/${runId}/confirm`;
   if (!isDraft && !itemId) { log('draftLog', '候选缺少 item_id，无法逐项确认'); return; }
-  const body = isDraft ? {} : { item_ids: [itemId] };
+  const body = isDraft ? {} : { item_ids: [itemId], items: [{ item_id: itemId }] };
   const r = await api('POST', target, body);
   log('draftLog', '确认 ' + r.status + ' ' + JSON.stringify(r.body).slice(0, 180));
   loadCandidates();

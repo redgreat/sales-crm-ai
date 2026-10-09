@@ -30,7 +30,7 @@ from app.knowledge import (
 )
 from app.persistence import conversations as conversations_repo
 from app.persistence import runs as runs_repo
-from app.util import utcnow
+from app.util import redact_error_message, safe_error_message, utcnow
 
 logger = logging.getLogger("sales-crm-ai.executor")
 
@@ -257,11 +257,14 @@ class Executor:
             try:
                 final_state = await graph.ainvoke(invoke_input, config=config)
             except Exception as exc:  # noqa: BLE001 —— 执行失败统一转 run 失败
-                raise RunFailure(str(exc), code="GRAPH_FAILED") from exc
+                # 供应商/驱动异常文本可能含完整请求体与密钥，落库前必须脱敏
+                raise RunFailure(redact_error_message(str(exc)), code="GRAPH_FAILED") from exc
             elapsed_ms = int((time.monotonic() - started) * 1000)
 
             if error := final_state.get("error"):
-                await self._handle_failure(run_id, generation, {"code": "GRAPH_ERROR", "message": str(error)})
+                await self._handle_failure(
+                    run_id, generation, {"code": "GRAPH_ERROR", "message": redact_error_message(str(error))}
+                )
                 return
 
             if "__interrupt__" in final_state or await _has_pending_interrupt_async(
@@ -296,7 +299,10 @@ class Executor:
             await self._handle_failure(run_id, generation, {"code": exc.code, "message": str(exc)})
         except Exception as exc:  # noqa: BLE001
             logger.exception("run %s executor crash", run_id)
-            await self._handle_failure(run_id, generation, {"code": "EXECUTOR_CRASH", "message": str(exc)})
+            # 未知异常只落类型名：原始报文留给服务端日志，不进库、不回客户端
+            await self._handle_failure(
+                run_id, generation, {"code": "EXECUTOR_CRASH", "message": safe_error_message(exc)}
+            )
         finally:
             heartbeat.cancel()
             try:
@@ -361,11 +367,16 @@ class Executor:
         )
 
     async def _handle_failure(self, run_id: str, generation: int, error: dict[str, Any]) -> None:
+        """落库前的最后一道脱敏：error 会进 ai_runs.error 与 status_history 并回客户端。"""
+        sanitized = {
+            "code": str(error.get("code") or "INTERNAL"),
+            "message": redact_error_message(str(error.get("message") or "")),
+        }
         outcome = await runs_repo.fail_run(
             self.pool,
             run_id=run_id,
             generation=generation,
-            error=error,
+            error=sanitized,
             backoff_seconds=self.backoff_base_seconds,
         )
         if outcome is None:

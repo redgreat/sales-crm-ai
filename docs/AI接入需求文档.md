@@ -440,7 +440,7 @@ M10/M11 沟通上传、M13～M15 拜访录音、M23～M25 会议输入共用该�
 | 导入 | CRM 服务端拉取可信 Run 结果，`importRunResult` 重复导入返回已有候选；当前唯一键 `(ai_run_id,item_id)`，目标来源/结果版本与批次约定按第 5 节补齐。 |
 | 确认/重试 | CRM 集成路径下 `/runs/{runId}/confirm`、`/runs/{runId}/retry`；现有 items 是 override，**不是已实现明确勾选集合**。上线前必须补选中项、候选/来源版本和确认快照；原键重试先鉴权。 |
 | 任务 | `TaskService.createFromExtract` 写 work_tasks，source=EXTRACT，幂等键 `ai:{run_id}:{item_id}`；customer_id/ai_candidate_id 审计关联。本人 OPEN，指派他人 PENDING_ACCEPT，正式 canManageRelation 权限；停止写 sales_task。 |
-| 活动 | sales_activity，source=AGENT_CANDIDATE，同类幂等键。当前集成服务事务内 Mapper 写入，尚未收敛 ActivityService；不把现状当最终设计。 |
+| 活动 | `ActivityService.createFromExtract` 统一正式写入 `sales_activity`，`source=AGENT_CANDIDATE`，幂等键 `ai:{runId}:{itemId}`；AI 仓不写 CRM 主库。 |
 | 建档 | draft@1 输出候选，CRM importDraftResult/confirmDraft 分派正式客户/联系人/线索/商机 Service；本人确认、查重与权限不可省略，真实端到端仍待验收。 |
 
 契约测试 `tests/test_p4_contract.py`；服务签名验证通过不代表 JWT 用户候选确认、正式写入和权限恢复已通过。迁移与测试记录统一放实施计划，不在本需求重复记“完成率”。

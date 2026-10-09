@@ -23,6 +23,7 @@ from app.config import Settings
 from app.errors import ValidationFailed
 from app.integrations.files import DEFAULT_MAX_BYTES, FileError, parse_bytes
 from app.persistence import recognition as recognition_repo
+from app.util import redact_error_message
 
 _FILE_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 PROCESSINGS = ("asr", "ocr", "parse")
@@ -221,7 +222,8 @@ async def _recognize(
                 data=data, name=name, content_type=str(file_meta.get("content_type") or ""), max_bytes=DEFAULT_MAX_BYTES
             )
         except FileError as exc:
-            raise StageError("parse", "PARSE_UNSUPPORTED", str(exc)) from exc
+            # 解析异常会落库（识别行 + Run 错误），脱敏后再作为阶段错误抛出
+            raise StageError("parse", "PARSE_UNSUPPORTED", redact_error_message(str(exc), limit=120)) from exc
         evidence = [{"truncated": parsed.truncated, "encoding": parsed.encoding, "file_type": parsed.file_type}]
         return parsed.text, "", evidence, None, "builtin-parse", ""
 

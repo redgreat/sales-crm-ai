@@ -227,6 +227,12 @@ logs/
 
 # ---- sales-crm-ai 本地配置（含密钥，不入库）----
 conf/config.yml
+conf/config.ui.yml
+conf/secrets.ui.yml
+conf/admin.users.yml
+conf/admin.bootstrap.txt
+# 迁库脚本清理 config.yml 前的备份，含明文密钥，绝不入库
+conf/backup-*/
 
 # ---- frontend (SvelteKit) ----
 frontend/node_modules/
@@ -241,4 +247,7 @@ scripts/*
 # 镜像发布脚本：自动打 v* 标签触发 CI 构建发布，不含密钥
 !scripts/dockerbuild.ps1
 !scripts/dockerbuild.sh
+# GitLab 镜像仓同步脚本：凭据走环境变量/凭据管理器，不含密钥
+!scripts/sync-gitlab.ps1
+!scripts/sync-gitlab.sh
 .archify/

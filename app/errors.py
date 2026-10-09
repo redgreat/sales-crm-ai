@@ -53,6 +53,13 @@ class ValidationFailed(ApiError):
     code = "VALIDATION_FAILED"
 
 
+class PayloadTooLarge(ValidationFailed):
+    """入参超限：与"格式不对"区分，便于客户端提示"内容过长"而不是重填。"""
+
+    status_code = 413
+    code = "PAYLOAD_TOO_LARGE"
+
+
 class CapabilityUnknown(ApiError):
     status_code = 400
     code = "CAPABILITY_UNKNOWN"

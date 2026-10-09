@@ -1,11 +1,11 @@
 # sales-crm-ai 多阶段构建镜像
-# 阶段1: 前端编译（Node.js）
+# 阶段1: 配置后台前端编译（Node.js）→ 静态 SPA 产物 frontend/build
 FROM node:24-alpine AS frontend
 WORKDIR /build/frontend
 COPY frontend/package*.json ./
 RUN npm ci --legacy-peer-deps
 COPY frontend/ .
-RUN npx svelte-kit sync && npx vite build
+RUN npx svelte-kit sync && npx vite build && test -f build/index.html
 
 # 阶段2: Python 运行时
 FROM python:3.12-slim
@@ -39,8 +39,8 @@ COPY scripts/serve.py scripts/init_db.py scripts/init_checkpoints.py ./scripts/
 COPY deploy/s6/ai-api/ /etc/s6-overlay/s6-rc.d/ai-api/
 COPY deploy/s6-user-bundles/ /etc/s6-overlay/user-bundles.d/
 
-# 复制前端构建产物
-COPY --from=frontend /build/frontend/.svelte-kit/output ./frontend-dist
+# 复制配置后台前端产物（FastAPI 挂在 /admin 提供，与 API 同端口）
+COPY --from=frontend /build/frontend/build ./admin-dist
 
 RUN mkdir -p conf .local && chown -R nobody:nogroup /app \
     && chmod +x /etc/s6-overlay/s6-rc.d/ai-api/run

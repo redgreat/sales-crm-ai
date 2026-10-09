@@ -130,13 +130,27 @@ class PgCluster:
 
 @pytest.fixture(scope="session")
 def pg_cluster() -> PgCluster:
-    """真实 PostgreSQL 实例；不可用时显式 skip（不伪造测试通过）。"""
+    """真实 PostgreSQL 实例；不可用时显式 skip（不伪造测试通过）。
+
+    默认用 `initdb` 起全新临时实例。若本机 `initdb` 不可用（Windows 版 initdb 经
+    popen 调 cmd.exe 引导集群，受安全策略限制时会报 `popen failure`），可设置
+    `SAI_PG_REUSE_DATADIR` 指向一个**已初始化**的数据目录直接复用，跳过 initdb。
+    这只是绕过初始化，不改变"必须连真实 PostgreSQL"的门槛。
+    """
     url_env = os.environ.get("SAI_TEST_DATABASE_URL")
     if url_env:
         pytest.skip("SAI_TEST_DATABASE_URL 模式暂不支持启停测试；请使用内置临时实例")
     bin_dir = _find_pg_bin()
     if bin_dir is None:
         pytest.skip("找不到 PostgreSQL 二进制（initdb/pg_ctl），跳过真实数据库测试")
+    reuse = os.environ.get("SAI_PG_REUSE_DATADIR")
+    if reuse:
+        port = int(os.environ.get("SAI_PG_REUSE_PORT") or 0) or _free_port()
+        cluster = PgCluster(bin_dir, Path(reuse), port)
+        cluster.start()
+        yield cluster
+        cluster.stop(mode="immediate")
+        return
     datadir = PROJECT_ROOT / ".local" / "pg-test"
     datadir.parent.mkdir(parents=True, exist_ok=True)
     cluster = PgCluster.provision(bin_dir, datadir)

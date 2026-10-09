@@ -22,6 +22,7 @@ from app.errors import (
 )
 from app.enhanced_input import validate_file_ref
 from app.graphs.interrupts import get_pending_interrupt
+from app.input_limits import validate_resume_values, validate_run_input
 from app.persistence import conversations as conversations_repo
 from app.persistence import runs as runs_repo
 from app.persistence import recognition as recognition_repo
@@ -58,6 +59,9 @@ def _serialize(run: dict[str, Any]) -> dict[str, Any]:
         "prompt_version": run.get("prompt_version"),
         "read_only": spec.read_only if spec else None,
         "pregen": spec.pregen if spec else None,
+        # 结果版本：CRM 侧导入/确认时的比对基准（每成功完成一次 +1）。
+        # 跨仓契约要求"版本变了不能拿旧结果写业务"，因此必须随 Run 一起透出。
+        "result_version": run.get("result_version"),
         "result": run.get("result"),
         "error": run.get("error"),
         "status_history": run.get("status_history", []),
@@ -95,7 +99,10 @@ def _validate_capability_input(spec: CapabilitySpec, body: CreateRunBody) -> Non
     - 抽取型：需要 input.text；
     - 只读分析型：需要 CRM 按权限装配的 input.facts（每项有稳定 id 供引用核对）；
     - 预生成型：额外需要 beneficiary.user_id 与 schedule_key（调度幂等）。
+
+    容量上限先于业务校验：超限输入不进队列、不写库、不调用模型。
     """
+    validate_run_input(body.input or {})
     payload = body.input or {}
     file_ref = payload.get("file_ref")
     if file_ref is not None:
@@ -347,6 +354,7 @@ async def cancel_run(run_id: str, request: Request, operator: OperatorContext = 
 async def resume_run(run_id: str, body: ResumeBody, request: Request, operator: OperatorContext = Depends(require_operator)) -> dict[str, Any]:
     run = await runs_repo.get_run(request.app.state.pool, run_id)
     _require_owned_run(run, operator)
+    validate_resume_values(body.values)  # 补参同样进 checkpoint 与模型上下文
     if run["status"] != "waiting_input":
         raise RunNotResumable(f"当前状态 {run['status']} 不可恢复")
     # 会话生命周期一致性：closed/expired 会话里的等待 Run 也不能再恢复

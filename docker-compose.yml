@@ -11,6 +11,7 @@
 #        docker compose run --rm sales-crm-ai python scripts/init_checkpoints.py --apply
 #   3. 启动：docker compose up -d
 #   4. 验证：curl -f http://127.0.0.1:8310/ready （schema/checkpoint/model 三项须 ok）
+#      后台页面：http://127.0.0.1:8310/admin （已打包进镜像，无需额外部署前端）
 #
 # 单容器同时运行 API 与 worker（uvicorn lifespan 受管，worker.enabled 控制）。
 # 数据库用外部 PostgreSQL（生产建议托管实例，如阿里云 RDS——库部署/备份由云托管负责）；
@@ -33,6 +34,9 @@ services:
       #   SAI_ASR_API_KEY            百炼录音识别
       #   SAI_OCR_ACCESS_KEY_ID / SAI_OCR_ACCESS_KEY_SECRET      阿里云 OCR
       #   SAI_OSS_ACCESS_KEY_ID / SAI_OSS_ACCESS_KEY_SECRET / SAI_OSS_ENDPOINT / SAI_OSS_BUCKET
+      # 配置后台（已打包进镜像，访问 http://<host>:8310/admin）：
+      #   SAI_ADMIN_ENABLED=false        关闭后台（页面与后台 API 一律 404）
+      #   SAI_ADMIN_ALLOW_PROD=true      生产环境放行管理面（默认关闭，建议仅内网）
       SAI_CONFIG: /app/conf/config.yml
     volumes:
       - ./conf/config.yml:/app/conf/config.yml:ro

@@ -36,6 +36,10 @@ async def _forward(request: Request, forward_path: str, *, signed: bool) -> Resp
     headers: dict[str, str] = {
         "content-type": request.headers.get("content-type", "application/json")
     }
+    # 管理端会话 Token 由浏览器持有，必须原样透传，否则登录后仍被判未登录
+    authorization = request.headers.get("authorization")
+    if authorization:
+        headers["authorization"] = authorization
     if signed:
         operator = OperatorContext(
             user_id=settings.api.playground.operator_user_id,
@@ -57,7 +61,7 @@ async def _forward(request: Request, forward_path: str, *, signed: bool) -> Resp
     return _proxy_response(response)
 
 
-@router.api_route("/api/{path:path}", methods=["GET", "POST", "DELETE"])
+@router.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def proxy_api(path: str, request: Request) -> Response:
     settings = request.app.state.settings
     if not (settings.environment != "prod" and settings.api.playground.enabled):

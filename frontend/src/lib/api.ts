@@ -97,11 +97,35 @@ export interface ServiceCheck {
 	checks?: Record<string, { ok: boolean; [k: string]: unknown }>;
 }
 
+export interface SettingsValues {
+	model: { provider: "stub" | "openai_compatible"; base_url: string; name: string; temperature: number; timeout_seconds: number; max_retries: number };
+	crm: { base_url: string; timeout_seconds: number };
+	asr: { enabled: boolean; workspace_id: string; region: string; model: string; language_hints: string[]; diarization_enabled: boolean; timeout_seconds: number; poll_interval_seconds: number; poll_timeout_seconds: number };
+	ocr: { enabled: boolean; endpoint: string; type: string; output_coordinate: string; timeout_seconds: number };
+	oss: { enabled: boolean; endpoint: string; bucket: string; signed_url_ttl_seconds: number };
+	research: Record<"bocha" | "qichacha", { enabled: boolean; url: string; tool_name: string; query_argument: string; timeout_seconds: number }>;
+}
+
+export interface SettingsSnapshot {
+	revision: string;
+	environment: "dev" | "test" | "prod";
+	values: SettingsValues;
+	credentials: Record<string, boolean>;
+	restart_required: boolean;
+}
+
 function newIdempotencyKey(prefix: string): string {
 	return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export const api = {
+	getSettings(): Promise<SettingsSnapshot> {
+		return request("GET", "/v1/settings");
+	},
+
+	saveSettings(revision: string, values: SettingsValues): Promise<SettingsSnapshot> {
+		return request("PUT", "/v1/settings", { revision, values });
+	},
 	async health(): Promise<boolean> {
 		try {
 			return (await fetch("/playground/health")).ok;

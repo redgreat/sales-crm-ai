@@ -115,13 +115,17 @@ async def ask_missing_node(state: ExtractGraphState) -> dict[str, Any]:
 async def build_candidates_node(state: ExtractGraphState) -> dict[str, Any]:
     """组装最终候选建议（只读输出；不创建任何正式对象）。"""
     extraction = dict(state.get("extraction") or {})
+    customers = extraction.get("customers", [])
+    summary = str(extraction.get("summary") or "").strip() or str(state.get("user_text") or "").strip()
     result = {
+        "summary": summary,
         "candidates": {
+            "customers": customers,
             "activities": extraction.get("activities", []),
             "tasks": extraction.get("tasks", []),
         },
         "references": {
-            "customers": extraction.get("customers", []),
+            "customers": customers,
             "source": "communication.extract",
         },
         "notes": "候选建议需 CRM 用户本人确认后才会写入正式业务。",

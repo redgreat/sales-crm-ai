@@ -1,14 +1,26 @@
 # CRM AI 实施计划（Python / AgentZR 模板）
 
-> V2.5｜2026-10-02 17:30｜依据：[需求](AI接入需求文档.md)。六份阶段文档已归并到两份主文档：本计划保存实施/验收、联调操作及历史证据；需求第 11～13 节保存移动端决策、增强输入流程及双端契约。环境与账号另见 [测试规范](测试规范.md)。
-> 本次仅归并文档，不重跑云服务、数据库或正式业务写入测试；下列历史通过数字均保留原日期与验证范围。另一智能体正在进行的 ASR/OCR 联调，以其后续回填结果为准。
-> `[x]` 仅表示该小项有对应实现/证据；`[ ]` 表示部分实现或验收未闭合。历史完成记录不等于本轮实测，缺失交接文档不作为唯一证据。
-> 进度总览：**P0 部分完成 → P1 主体已实现（历史验收）→ P2 主体已实现但恢复门槛待补 → P3 大部分闭环（2026-10-01 消息窗口/轮次幂等/生命周期一致性收口；跨轮指代与真实弱网样本开放）→ P4 进行中（M-03 建档端到端 2026-10-02 真实通过；活动/任务侧真实闭环、响应丢失与撤权待补）→ P5 进行中（ASR/OCR POC 已通过；OSS 本地文件与 LLM 串联未验收）→ P6 未完成**。P-UI 为 Svelte 联调端，不等于生产移动端；P-DEV 保留原验收记录，本轮未复测。测试用 H5 联调端（`tests/h5/`）2026-10-02 新增，仍属联调工具而非生产 H5。
-> CRM Java 工作区已存在集成 Controller、HMAC、候选和活动/任务写入实现，不能再标记“未改动”。移动端新增对齐工作包 P-MOBILE，PRD 冲突待评审。
+> V2.5｜2026-10-02 17:30｜依据：[需求](AI接入需求文档.md)。六份阶段文档已归并到两份主文档：本计划保存实施/验收、联调操作及历史证据；需求第 11～13 节保存移动端决策、增强输入流程及双端契约。环境与账号另见 [测试规范](测试规范.md)。>   
+> 本次仅归并文档，不重跑云服务、数据库或正式业务写入测试；下列历史通过数字均保留原日期与验证范围。另一智能体正在进行的 ASR/OCR 联调，以其后续回填结果为准。>   
+> `[x]` 仅表示该小项有对应实现/证据；`[ ]` 表示部分实现或验收未闭合。历史完成记录不等于本轮实测，缺失交接文档不作为唯一证据。>   
+> 进度总览：**P0 部分完成 → P1 主体已实现（历史验收）→ P2 主体已实现但恢复门槛待补 → P3 大部分闭环（2026-10-01 消息窗口/轮次幂等/生命周期一致性收口；跨轮指代与真实弱网样本开放）→ P4 进行中（M-03 建档端到端 2026-10-02 真实通过；活动/任务侧真实闭环、响应丢失与撤权待补）→ P5 进行中（ASR/OCR POC 已通过；OSS 本地文件与 LLM 串联未验收）→ P6 未完成**。P-UI 为 Svelte 联调端，不等于生产移动端；P-DEV 保留原验收记录，本轮未复测。测试用 H5 联调端（`tests/h5/`）2026-10-02 新增，仍属联调工具而非生产 H5。>   
+> CRM Java 工作区已存在集成 Controller、HMAC、候选和活动/任务写入实现，不能再标记"未改动"。移动端新增对齐工作包 P-MOBILE，PRD 冲突待评审。>   
+> 2026-10-08 新增 [AI模块架构评审与智能体开发路线](AI模块架构评审与智能体开发路线.md)（架构结论、P0/P1/P2 发现、阶段 A-D 路线、给 AI 智能体的强制指令），并按该路线落地：AI 仓 P1 加固（第 3 节）+ CRM Java 跨仓骨架（6.2 节）+ 证据（12.1 节）。本轮**未**改动 PC 前端，其缺失的 `@/api/crm/ai` 仍是 P0 阻塞。
 
 ## 1. 路线与门槛
 
 P0 基线 → P1 裁剪骨架 → P2 可靠执行 → P3 最小多轮 → P4 CRM 文字闭环 → P5 全业务能力 → P6 全量验收。P1 后可并行做 P-UI 页面和 P-DEV 启动脚本，但其完成不代替生产闭环。先复用成熟图与 checkpoint，再编写业务节点；不自研 LangGraph 替代品。
+
+### 1.1 架构评审结论与阶段路线（2026-10-08，后续智能体先读）
+
+完整版见 [AI模块架构评审与智能体开发路线](AI模块架构评审与智能体开发路线.md)；本节只放"必须遵守"的摘要，两者冲突时以评审文档为准。
+
+- **结论：架构方向合理，不推倒重写。** 明确保留：分层单向依赖、Run 队列 + 租约 + 执行代次、HMAC + nonce 防重放、知识先过滤后入模、AI 只产候选/草稿、正式写入归 CRM 业务 Service。
+- **明确不要做**：不回退到 Java 内实现 AI、不自研图引擎、不引入通用 Agent 平台、不为实时性引入 SSE 第二套状态机（Run + 轮询已够）、不让 AI 直连 CRM 主库、不把数组下标当长期业务身份、不用正则替代结构化输出契约。
+- **阶段路线**：A 跨仓契约与闭环 → B 权限与撤权 → C 版本与保留治理 → D 质量与生产化。A/B 收口前不扩大能力数量，也不做"看起来更聪明"的自主编排。
+- **本轮已落地**：AI 仓 P1 加固（第 3 节）、CRM Java 跨仓骨架（6.2 节），证据见 12.1。
+- **仍未闭合**：CRM PC 前端 `src/api/crm/ai.js` 缺失（P0，需在 PC 仓补，AI 侧不得伪造）；对象会话每轮重鉴权；撤权与保留期清理链路；跨 Run 识别去重原子 claim；Prompt/结构化输出与检索质量验收。
+- **给智能体的硬约束**：改能力先改 `app/capabilities.py` 注册表；密钥/usage/费用不入库、不进日志、不进消息与 checkpoint；跨仓字段变更必须两端同批次并留版本号；不得把"存在代码"写成"已验收"。
 
 ## 2. P0：基线、接口与模板清单
 
@@ -35,6 +47,8 @@ P0 基线 → P1 裁剪骨架 → P2 可靠执行 → P3 最小多轮 → P4 CRM
 - [x] 移除网关注册/Key 签发/通道、usage/cost 回调、平台模型表和环境变量；过滤供应商 usage 元数据，不落消息/checkpoint/日志。（契约测试扫描 import 无网关/计费符号；strip_usage_metadata 递归剥离）
 - [x] 新库最小迁移及 checkpoint 显式初始化入口；启动只检查，不自动改库。禁止执行 AgentZR 全量平台初始化 SQL。（`scripts/init_db.py --apply`、`scripts/init_checkpoints.py --apply`；启动只读校验，缺结构 /ready 503）
 - [x] 契约测试验证无网关服务和无网关表时可以启动、调用测试 Provider；Stub 显式启用且生产拒绝。
+- [x] **2026-10-08 P1 加固（评审 P1，不改跨仓契约）**：① Run 序列化透出 `result_version`（`app/api/routes/runs.py::_serialize`），作为 CRM 导入/确认的比对基准；② 入参上限统一前置拦截——`input` 序列化 512KB、单段文本 20000 字符/64KB、`facts` 200 条、单条事实 8KB、嵌套 ≤8 层、补参 64KB（`app/input_limits.py`，超限 413 `PAYLOAD_TOO_LARGE`，不进队列、不写库、不调模型）；③ 错误脱敏——未知异常只落类型名（`safe_error_message`），已知异常经 `app/util.py::redact_error_message` 剥离 api_key/Bearer/JWT/`sk-`/URL 查询串后再入 `ai_runs.error` 与 `status_history`，`executor._handle_failure` 为最后一道（`app/enhanced_input.py` 解析阶段同步收敛）；④ MCP 出站守卫——`app/net_guard.py` 强制 https、拒绝 URL 内嵌凭据、解析后拒绝回环/私网/CGNAT/链路本地/保留/组播地址、支持 `research.*.allowed_hosts` 白名单、禁止跟随重定向（重定向会把 Bearer 带到已校验目标之外）；该字段不开放给配置后台编辑，配置保存与启动均校验。新增 `tests/test_p1_hardening.py` **17 passed**。
+- [ ] MCP 出站的 DNS rebinding 窗口未消除（"先解析校验、后建连"分两步）；内网 MCP 不在支持范围，需运维侧用出口策略或专用公网域名收敛。不宣称已完全防住 SSRF。
 
 验收：能独立运行最小健康 API 与单轮测试图，无 AgentZR 运行时路径或 gateway 依赖。不得仅删除 compose 服务后声称去网关完成。✅（52 项测试含真实 PG；**真实 Provider 已于 2026-09-29 用 LongCat 实测通过**，原「无凭据」限制解除）
 
@@ -73,9 +87,9 @@ P0 基线 → P1 裁剪骨架 → P2 可靠执行 → P3 最小多轮 → P4 CRM
 - [x] V010 迁移版本冲突已解决（2026-10-01，用户授权 MCP 直接操作 zrcrm 库）：分支快进 origin/master 取回 V014-V017；冲突脚本定版 `V018__ai_agent_candidates.sql`（`confirmed_by`→`confirmed_by_id` 对齐实体，全幂等）；新增 `V019__work_tasks_extract.sql`。两版本均已在 zrcrm 库执行并登记 flyway history（rank 19/20，checksum 按 LineChecksum 算法核对，且 validate-on-migrate=false）。
 - [x] 双端事实查询契约已冻结（2026-10-01，见 需求第 13 节）：Java 新增 `GET /ai/integration/facts/{subjectType}/{subjectId}`（customer/lead/opportunity），删除旧 POST customer 专用端点；**修复 Python 签名 path 口径缺陷**（原签相对路径，Java 验签用完整 getRequestURI，必 401——现从 base_url 提取应用前缀）；`tests/test_p4_contract.py` 5 passed（MockTransport 验证方法/路径/签名重构/响应解析/401 透传）。
 - [x] 任务候选确认写入已切换正式 Service（2026-10-01）：`TaskService.createFromExtract` → **work_tasks 统一任务表**（source=EXTRACT，V019 加幂等键/客户锚点/候选关联三列），本人确认=OPEN、指派他人=PENDING_ACCEPT（正式指派权限 canManageRelation，弃用 AI 专用 R1/R2 判定），并发确认由幂等唯一索引兜底；`sales_task` 停止写入。
-- [ ] CRM Java 仅增加集成薄层：认证上下文、事实查询、Run 代理/结果拉取、候选导入；不再实现模型编排或记忆。（骨架符合。**2026-10-07 更新**：`ActivityService` 已在 master 落地（page/create 手工入口）；AI `confirmRun` 写入 `sales_activity` 仍由集成服务事务内 Mapper 直插（幂等键防重），任务侧走 `TaskService.createFromExtract`——两条路径是否统一见开放项 C-3。另：Run 代理已支持 file_ref（CRM 侧校验归属/状态/版本/处理类型后透传，`createFileRun`）。）
+- [ ] CRM Java 仅增加集成薄层：认证上下文、事实查询、Run 代理/结果拉取、候选导入；不再实现模型编排或记忆。（骨架符合。2026-10-08 活动确认已接入 `ActivityService.createFromExtract`，任务走 `TaskService.createFromExtract`；Java 编译及活动服务 4 项 JUnit/Mapper XML 检查通过。运行中的 :18080 仍是旧 Java 实例，正式写入未以新代码验收。Run 代理已支持 file_ref。）
 - [x] 冻结服务认证和最小用户授权凭据；Python 不直连 CRM 库，CRM 不暴露模型 Key。（签名方案双端逐字段一致；密钥经环境变量注入。）
-- [ ] 沟通/会议产生建议 → CRM 幂等导入候选 → 用户补齐/确认 → 正式活动/任务 Service；真实业务接口缺失显式补在 CRM，不造 Python 正式任务表。（任务侧闭环已具备；活动侧待 ActivityService 收敛。）
+- [ ] 沟通/会议产生建议 → CRM 幂等导入候选 → 用户补齐/确认 → 正式活动/任务 Service；真实业务接口缺失显式补在 CRM，不造 Python 正式任务表。（活动、任务均由 CRM 正式 Service 写入，仍须验收权限/审计/幂等。）
 - [x] 顺序重复导入查既有候选、先活动后任务及按原业务键查正式对象的基础代码已有。（不等于并发和故障恢复通过。）
 - [ ] 补齐稳定客户端请求键、来源/结果/候选版本、明确勾选项集合、确认快照、员工和客户数据权限；正式写入复用完整业务 Service，回执/审计一致性与响应丢失对账通过。（**2026-10-02 三项已落地（CRM service_dev_ai，未提交待用户指示）**：①稳定客户端请求键——createRun 支持 client_request_key，未传按员工+能力+内容+当日派生，弱网重复点击命中同一 Run；②客户同名匹配走数据范围——非 R3/R4/R5 限本人创建的客户（消除无权客户 id/存在性泄露），经营关系客户由写入侧 checkCustomerDuplicates 带范围查重兜底；③confirmRun 支持显式 item_ids 勾选集合（M-02 不静默整批确认，空集合非法，兼容旧整批调用）。**仍开放**：来源/结果/候选版本快照、审计一致性。`tests/test_p4_draft_live.py` 3 passed 回归。）
 - [x] **测试用 H5 联调端（2026-10-02，`tests/h5/index.html` + `scripts/h5_server.py`，提交 `f73b5cd` 及后续改造）**：以生产 H5 形态覆盖 M-12 能力目录、M19 助手会话（缺参追问→补参→历史窗口）、M03/M20 草稿链（提交→轮询→导入→确认/忽略/失败重试）、M07 候选三视图。**登录不再粘贴 token**：页面用工号/密码登录，`scripts/h5_server.py` 在服务端完成密码授权后写 `.local/crm-token.txt`，并把 `/crm/**` 同源代理到 CRM 注入 token——同时绕过 CRM CORS 白名单只放 `localhost:81` 的限制（file:// 直开会被拦）。已验证：`/__session`、`/__login`（`ZR20050012`，token 有效期 3600s）、`/crm/ai/capabilities`、`GET/POST /crm/ai/candidates`、`POST /crm/ai/conversations` 均 200。**不等于**生产 H5 验收：无企微登录、未做浏览器级用例、不替代 P-MOBILE 真机验收。
@@ -83,21 +97,33 @@ P0 基线 → P1 裁剪骨架 → P2 可靠执行 → P3 最小多轮 → P4 CRM
 - [x] **2026-10-07 本地只读复测**：复用已运行的 Java :18080 与 AI :8310（AI `/ready` 200）；AI 当前配置签名访问不存在客户返回 200/`found=false`，相同 nonce 第二次请求与错误签名均返回 401。仅是已运行实例的非写入烟测，未核实该 Java 进程对应的构建分支，不替代上方 9 场景完整复测或正式业务写入验收。
 - [ ] 验证「正式提交成功但响应丢失」、重复确认、候选版本改变、无指派权限、来源撤权和跨用户查询。（**2026-10-02 部分闭合**：`tests/test_p4_draft_live.py` **3 passed**——真实 JWT（`ZR20050012`）+ 真实模型 + zrcrm 正式写入，覆盖建档草稿端到端写入、弱网重复确认幂等、同名客户拒绝并给「改为补增」提示；提交 `93dd082`。**仍开放**：候选/来源版本改变、无指派权限、来源撤权、跨用户查询，以及活动/任务侧的同等真实闭环。**响应丢失对账已于 2026-10-07 闭合（原开放项 C-1）**：`createRun` 同键同内容幂等重放返回原 Run（异内容 409）、重复确认幂等返回原 formal_id——客户端重发原请求即得确定结果，无需专项回执接口。）
 
+
 验收：真实文字生成到正式业务写入闭环；Stub/模拟确认不算。记录涉及 CRM 仓库的分支、变更文件和联调版本，不整体合并旧 AI 分支。
 
 本轮证据约束：已有历史全套日志记录 CRM 7 项失败；Java JDBC 测试的若干用例直接改库而未调用业务服务。必须补真实 Controller/Service 的撤权/版本/越权测试，并断言合法样本至少成功写入活动和任务，不能接受“全部业务写入失败也算全链路通过”。
 
 ### 6.1 P0–P4 未完成项核对（2026-10-07）
 
-| 阶段 | 代码与测试现状 | 仍不能勾选的原因 |
-|---|---|---|
-| P0 | 来源文件和三仓库本机快照已核对；签名/事实契约已有 Mock 与历史只读联调 | 模板发布归属确认、生产 H5 仓库、候选来源/结果版本与集群防重放契约未闭合；同名权限、撤权、正式响应丢失需真实样本 |
-| P1 | 最小服务/去网关已实现且有既有验收 | 无新的未完成代码项，本轮不重复跑 P1 全套 |
-| P2 | 本地真实 PG 的崩溃接管、代次隔离、40 条积压与尝试上限已验 | 跨图版本兼容/升级路径未实现或无历史样本；有外部副作用的节点、部署替换和生产饱和缺环境/阈值（B-1） |
-| P3 | 幂等、补参、关闭交错与本地并发双击已验 | 跨轮指代与当前事实权限的真实样本、历史/知识撤权的端到端重验、真实弱网和多进程部署仍缺（B-2） |
-| P4 | Java 集成代码存在；AI 侧 Mock 契约 5 项通过；7 项正式写入用例可收集且已收紧为失败即不通过 | ActivityService、来源/候选版本快照、撤权与响应丢失回补仍缺代码或契约；本轮写入已获授权但当前 Java 实例构建/启动受阻，受限账号越权仍缺第二账号（A-5、B-3、C-1/C-2/C-4） |
+| 阶段 | 代码与测试现状                                                                      | 仍不能勾选的原因                                                                          |
+| -- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| P0 | 来源文件和三仓库本机快照已核对；签名/事实契约已有 Mock 与历史只读联调                                       | 模板发布归属确认、生产 H5 仓库、候选来源/结果版本与集群防重放契约未闭合；同名权限、撤权、正式响应丢失需真实样本                        |
+| P1 | 最小服务/去网关已实现且有既有验收                                                            | 无新的未完成代码项，本轮不重复跑 P1 全套                                                            |
+| P2 | 本地真实 PG 的崩溃接管、代次隔离、40 条积压与尝试上限已验                                             | 跨图版本兼容/升级路径未实现或无历史样本；有外部副作用的节点、部署替换和生产饱和缺环境/阈值（B-1）                               |
+| P3 | 幂等、补参、关闭交错与本地并发双击已验                                                          | 跨轮指代与当前事实权限的真实样本、历史/知识撤权的端到端重验、真实弱网和多进程部署仍缺（B-2）                                  |
+| P4 | Java 集成代码存在；AI 侧 Mock 契约 5 项通过；7 项正式写入用例可收集且已收紧为失败即不通过；活动已接入 ActivityService | 来源/候选版本快照、撤权与响应丢失回补仍缺代码或契约；正式写入仍待当前 Java 构建实例验收，受限账号越权仍缺第二账号（A-5、B-3、C-1/C-2/C-4） |
 
 `[x]` 只对应表中已列出的具体小项，不能把 P2/P3/P4 整体改为完成。已通过的 P1 和历史 P4 只读/Mock 用例不再为补缺口而重复运行；新增 P4 写入断言尚未实际触发，不计为通过。
+
+### 6.2 跨仓骨架（2026-10-08，CRM Java 仓实现）
+
+按评审 P1「对象会话绑定只存未证权」「Run/候选版本与确认快照不完整」两项，在 `sales-crm-api-service`（分支 `service_dev_ai`）落地骨架，**不新增表、不改既有字段语义**，因此不需要新迁移：
+
+- [x] **对象会话准入校验**：`AiIntegrationServiceImpl.createConversation` 在 `requireStaff()` 之后调用新增的 `requireSubjectAccess(subjectType, subjectId)`，复用 `customerService/leadService/opportunityService.get`（业务 Service 自带权限与数据范围），不存在归一 404、无权由 Service 原样抛出。此前只校验登录，等价于任何登录员工都能拿任意对象 id 建会话并让 AI 回查事实。
+- [x] **候选版本快照**：`importRunResult` 读取 AI 侧 Run 的 `result_version / graph_version / prompt_version`，连同 `imported_at` 写入候选 `ai_payload` 的 `_ai_version` 节点（骨架阶段不新增列）。重复导入同一 `(run_id, item_id)` 时，若两侧版本都已知且不相等，返回 409「该 Run 的结果已更新…请作废旧候选后重新导入」，不再静默复用旧候选；任一侧版本未知（AI 未透出或老候选行）时放行，避免误伤既有联调。
+- [x] **确认版本守卫**：新增 `confirmRun(runId, itemIds, overrides, expectedResultVersion)` 重载（`AiIntegrationService` 接口 + Controller 从 body 读 `expected_result_version`）。版本不一致时**在任何写入之前**返回 409；传 null 保持旧客户端兼容。`toMap` 同步透出 `result_version/graph_version/prompt_version`，供客户端回传。
+- [x] **骨架守卫单测**：`salescrm-web/src/test/.../AiIntegrationServiceGuardTest`（8 项，纯 Mockito、不连库）——对象会话无权/不存在/契约外类型均在调用 AI 前被拒、可读时正确透传；确认版本不一致在任何写入前 409（`activityService.createFromExtract` 与 `updateById` 均未被调用）、版本一致时用 `ai:{run_id}:{item_id}` 幂等键写入、不传版本保持兼容；`listMyCandidates` 透出 `result_version/graph_version`。2026-10-09 以 `javac` + `JUnitCore` 直跑 **OK (8 tests)**。
+- [ ] **仍未做**：`_ai_version` 提升为独立列并纳入 Flyway（当前是 JSON 内节点，不便查询与审计）；确认时与 AI 侧**当前** `result_version` 比对（需额外一次 `getRun`，未做）；对象会话**每轮发消息**时重新鉴权——CRM 不落会话，需先补 AI 侧会话详情代理或 CRM 会话绑定表；对象会话切换后旧会话的处置策略。
+- [ ] **未做**：CRM 验收测试仍是直接 JDBC 改表（`AiIntegrationAcceptanceTest`），本轮未改造为 Controller→Service 测试；P4 正式写入仍受"运行实例早于源码"阻塞（见上）。
 
 **本轮 P4 实测阻塞（2026-10-07）**：用户已授权本轮正式写入，但 :18080/:18081 运行的 JAR 构建于 10-02，早于 `service_dev_ai@e2a6de8` 及 4 处现有未提交改动。当前源码上游 model/service/API 模块重建成功；web 的 Spring Boot repackage 因运行中 JAR 文件锁无法改名；独立 :18082 的 `spring-boot:run` 与完整类路径启动均在 `StaffIdentityFilterConfiguration` 反射阶段报 `NoClassDefFoundError: StaffService`。因此**未向旧版本正式写入**，7 项 `crmlive` 仅完成收集、未执行。需先得到可启动且可标识构建版本的 Java 测试实例，再运行本轮授权的活动/任务测试；受限账号、撤权、响应丢失仍需额外样本/接口。
 
@@ -143,10 +169,10 @@ P0 基线 → P1 裁剪骨架 → P2 可靠执行 → P3 最小多轮 → P4 CRM
 
 仅在明确测试环境、授权样本和允许调用付费云服务的前提下执行；本次文档整理不执行以下命令。密钥只放环境变量或忽略的本地配置，不写入文档、测试输出或 Git。
 
-| 能力 | 配置及开关 |
-|---|---|
-| ASR | `SAI_ASR_API_KEY`；`asr.enabled`。当前 DashScope 录音文件适配器使用可访问 URL，提交 → 轮询 task_id → 下载 transcription_url。 |
-| OCR | `SAI_OCR_ACCESS_KEY_ID` / `SAI_OCR_ACCESS_KEY_SECRET`；`ocr.enabled`。当前 RecognizeAllText 适配器支持 URL 或图片二进制，不强依赖 OSS。 |
+| 能力  | 配置及开关                                                                                                                                                |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ASR | `SAI_ASR_API_KEY`；`asr.enabled`。当前 DashScope 录音文件适配器使用可访问 URL，提交 → 轮询 task_id → 下载 transcription_url。                                                |
+| OCR | `SAI_OCR_ACCESS_KEY_ID` / `SAI_OCR_ACCESS_KEY_SECRET`；`ocr.enabled`。当前 RecognizeAllText 适配器支持 URL 或图片二进制，不强依赖 OSS。                                   |
 | OSS | `SAI_OSS_ENDPOINT` / `SAI_OSS_BUCKET` / `SAI_OSS_ACCESS_KEY_ID` / `SAI_OSS_ACCESS_KEY_SECRET`；`oss.enabled`。私有 Bucket，限定对象前缀及所需读写权限，签名时效按实际异步拉取窗口验证。 |
 
 环境变量优先于本地配置；启用而缺凭据应明确失败，不回退假成功。09-29 默认关闭描述是样例默认值，10-02 历史 POC 已获得 ASR/OCR 凭据，不再列“待申请”为当前阻塞；OSS 实际配置/最新进度由正在联调的智能体回填。不迁移旧手册的价格/免费额度及未验证的 RAM 策略名。
@@ -165,6 +191,8 @@ OCR 看区域锚点、数字/日期及模糊/大图错误；ASR 看时间锚点�
 ## 8. P-UI：AI 联调前端 ✅（替代实现）
 
 > 2026-09-29 决策：联调前端不再迁入 sales-crm-admin-ui（Vue2），改为本项目 `frontend/` 独立 Svelte 应用（SvelteKit + Tailwind v4 + shadcn-svelte lyra 风格：暗黑主题、无圆角）。CRM Vue2 内的最终业务入口仍留待 P4 后按需求第 6 节处理。
+
+2026-10-08：按用户要求，5174 原 Run 联调首页改为独立 AI 配置后台；业务联调仍在 `tests/h5/`。后台仅 dev/test 且 playground 显式启用时开放，编辑模型、外部接口和 MCP 的非密钥字段，保存至 `conf/config.ui.yml`，重启后生效；密钥不经浏览器，正式管理入口待并入 CRM 前端时另行设计权限与接口。
 
 - [x] 独立路由/目录，复用现有登录、请求封装及权限，不引入无关组件。（本项目独立前端；认证经 `/playground/api` 开发代理在服务端签名注入联调身份，浏览器不持密钥；仅 dev/test 且配置显式开启，生产 404 且拒绝启动）
 - [x] 能力选择、样例输入、Run/会话状态、结果/引用、追问、resume、取消和失败重试。（三个 Tab 的历史验收记录保留。）
@@ -207,6 +235,7 @@ OCR 看区域锚点、数字/日期及模糊/大图错误；ASR 看时间锚点�
 - [ ] 接入 M01/M09/M16/M17～M19 配套能力，日报三层版本、只读引用、当前权限及固定三项预生成，不新增 AI 自动推送。
 - [ ] 真 H5 环境验证弱网重复请求、跨用户深链、同名匹配、版本冲突、部分成功、响应丢失恢复、日报刷新保护、知识撤权及手工降级，关联后端 PRD 用例。
 
+
 - [x] **M-03 对话建档（产品版 V2.6 一期 6 项能力）实现（2026-10-01）**：新增类 4 项——AI 侧 `draft@1` 图（`app/graphs/draft.py`：按类型整理字段→必填缺失追问→草稿输出，图内零写入路径）+ 注册表 4 能力（customer/contact/lead/opportunity.draft，目录自动透出）+ `tests/test_p_mobile_drafts.py` 6 passed；CRM 侧 V025（candidate_type 扩展+draft_payload，避让用户侧 V020-V024 改号）+ `importDraftResult`（同名匹配，先匹配再新增）+ `confirmDraft`（分派 Customer/Contact/Lead/Opportunity 正式 Service 写入，重复确认幂等）。查询类 2 项映射现有 qa 族（object.qa / knowledge.qa+business.qa），不重复建设。**端到端联调已于 2026-10-02 通过**：`tests/test_p4_draft_live.py` 3 passed（提交 `93dd082`），走真实 JWT `ZR20050012` + LongCat 真实模型 + zrcrm 正式写入，含重复确认幂等与同名客户拒绝；`customer.draft` 补 `region`/`biz_line` 必填（CRM 建客户硬必填，缺什么追问什么）。158 passed 为 10-01 历史数字；2026-10-07 非写入全量结果见 12.1。
 
 完成条件：阻断 M 项已决定并回写移动端原文；生产 H5 + CRM + AI 同一版本完成真实测试。未决扩范围不默认实现，当前新增清单不承诺旧排期可覆盖。
@@ -223,19 +252,23 @@ OCR 看区域锚点、数字/日期及模糊/大图错误；ASR 看时间锚点�
 
 2026-10-07 在项目本地临时 PostgreSQL 上运行 `.venv/Scripts/python.exe -m pytest -q -m "not draftlive and not crmlive"`：本轮前最近结果 **200 passed、10 deselected，11 分 14 秒**。这覆盖纯逻辑与真实 PG 测试；排除 7 项 `crmlive` 与 3 项 `draftlive`，不代表正式 CRM 写入、真实模型或供应商调用验收。首轮全套曾因过期 JWT 文件自动启用 7 项 CRM 写入测试而返回 401，另 1 项草稿测试输入缺必填字段却等待成功；现已改为显式 `SAI_RUN_CRM_LIVE=1` 才允许运行写入测试，并修正草稿样本。该 200 项结果早于本轮新 P3/P4 测试改动，不能充作当前全量结果。
 
-| 日期 | 证据与边界 |
-|---|---|
-| 09-29 | AI HEAD 0074ebf、CRM HEAD 40366fb，均含其他 Agent 工作区改动。纯图/Provider/选定问答命令 14 passed；analysis+knowledge 排除 realpg 13 passed/11 deselected；两批重复 6 项，合计 **21 个不同用例**。未启动共享测试 PG、未调用真实 CRM 写入。 |
-| 09-30 | mobile_prd_alignment 17、file_parsing 16、knowledge 13 passed；原全套记录 141 passed/7 failed，失败为 CRM 连接/鉴权链路，不能未复现就归因 token。修复 is_current、历史知识引用过滤、scope 失败即关闭、fact_guard、能力目录及相关度排序。 |
-| 10-01 P3 | test_p3_conversations 10 passed、当时全量 147 passed（未跑既有 CRM 环境依赖）。最近消息窗口、逐轮 Run/client_key 幂等、TTL/三入口关闭过期拒绝、连接池类型引用修复；跨轮指代/版本恢复/真实弱网仍按 P3 开放。 |
-| 10-01 P4 | test_p4_contract 5 passed（MockTransport）；crm_facts_live_check 9 passed（真实 zrcrm、CRM service_dev_ai@af2d6c3），涵盖客户/线索/商机、403/404/400、错误签名与 nonce。**不包含 JWT 候选正式确认闭环**。 |
-| 10-01 建档 | test_p_mobile_drafts 6 passed、当时全量 158 passed；draft@1 四种草稿能力、CRM V025/importDraftResult/confirmDraft。test_p4_draft_live.py 正由其他智能体维护，不能据源码存在推定真实建档验收。 |
-| 10-02 输入 | 原手册记载 OCR 合成中文图 8 区域锚点、ASR 官方公网单人样例通过；OCR 相关单测记载 20 passed。OSS 本地上传、LLM 串联、真 H5/正式业务闭环未在该记录中验收，按第 7 节补测。 |
-| 10-02 M-03 E2E | `test_p4_draft_live.py` **3 passed**（提交 `93dd082`）：真实 JWT `ZR20050012` + LongCat 真实模型（单次 20~25s）+ zrcrm 正式写入——客户建档写入并回 `formal_id`、重复确认幂等返回同一 id、同名真实客户 `MATCHED` 且确认被拒并给「改为补增」提示、线索建档写入。**不含**：活动/任务侧、响应丢失、撤权、跨用户。 |
-| 10-02 H5 联调端 | `tests/h5/index.html` + `scripts/h5_server.py`：账号密码登录（服务端密码授权，client_secret 不出本机）→ `GET /__session` 200、`POST /__login` 200（token 3600s）、`/crm/**` 同源代理 `capabilities`/`candidates`(GET+POST)/`conversations` 均 200、未登录返回 401。属联调工具验证，**不是浏览器级功能验收，也不是生产 H5 验收**。 |
-| 10-02 ASR | `scripts/asr_poc.py` 官方公网单人样例三步链路（提交→轮询→下载转写）通过，含全文/时间锚点/说话人字段（paraformer-v2，`sk-ws-` 业务空间 Key）。OSS 本地文件上传链路未验。 |
-| 10-07 附件契约 | CRM `service_dev_ai@881878e`（= master 0a5dd8e + 附件组件提交）+ AI 侧 crm.py 客户端：`test_p5_file_contract.py` 8 项（含 P4 回归共 13 passed）；Flyway **V049**（resource_info）在 dev 库执行登记（checksum 362394189，同轮补应用 V048）；端到端烟测 **16 场景**通过——上传登记/元数据/下载/AI HMAC 访问/inline 字节/跨用户归一 found=false/撤权后下载 403+access.type=none/不存在归一/错误密钥 401（local 存储模式、18081 实例、`ZR20050012` JWT；脚本 `.local/smoke_resource.py` 不入库，场景见需求 12.5）。**不含**：真实 OSS 上传（B-4）、ASR/OCR 供应商调用、生产 H5。 |
-| 10-07 识别编排 | AI 库迁移 0005 `ai_file_recognitions` + `app/persistence/recognition.py` + `app/enhanced_input.py`：`test_p5_enhanced_pipeline.py` **9 passed**（真实 PG + Stub 适配器）——复用键（文件+版本+处理类型+配置指纹）命中后不再调供应商、失败/取消状态流转、分阶段 StageError 落库、ASR 时间锚点与 OCR 区域锚点进 evidence、URL 不落库、local 模式 ASR 显式失败。同日全量非写入套件 **215 passed, 10 deselected**（含上述新测试）。**不含**：真实 ASR/OCR 调用、Run 图接入、LLM 整理阶段。 |
+| 日期              | 证据与边界                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 09-29           | AI HEAD 0074ebf、CRM HEAD 40366fb，均含其他 Agent 工作区改动。纯图/Provider/选定问答命令 14 passed；analysis+knowledge 排除 realpg 13 passed/11 deselected；两批重复 6 项，合计 **21 个不同用例**。未启动共享测试 PG、未调用真实 CRM 写入。                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 09-30           | mobile_prd_alignment 17、file_parsing 16、knowledge 13 passed；原全套记录 141 passed/7 failed，失败为 CRM 连接/鉴权链路，不能未复现就归因 token。修复 is_current、历史知识引用过滤、scope 失败即关闭、fact_guard、能力目录及相关度排序。                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 10-01 P3        | test_p3_conversations 10 passed、当时全量 147 passed（未跑既有 CRM 环境依赖）。最近消息窗口、逐轮 Run/client_key 幂等、TTL/三入口关闭过期拒绝、连接池类型引用修复；跨轮指代/版本恢复/真实弱网仍按 P3 开放。                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 10-01 P4        | test_p4_contract 5 passed（MockTransport）；crm_facts_live_check 9 passed（真实 zrcrm、CRM service_dev_ai@af2d6c3），涵盖客户/线索/商机、403/404/400、错误签名与 nonce。**不包含 JWT 候选正式确认闭环**。                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 10-01 建档        | test_p_mobile_drafts 6 passed、当时全量 158 passed；draft@1 四种草稿能力、CRM V025/importDraftResult/confirmDraft。test_p4_draft_live.py 正由其他智能体维护，不能据源码存在推定真实建档验收。                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 10-02 输入        | 原手册记载 OCR 合成中文图 8 区域锚点、ASR 官方公网单人样例通过；OCR 相关单测记载 20 passed。OSS 本地上传、LLM 串联、真 H5/正式业务闭环未在该记录中验收，按第 7 节补测。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 10-02 M-03 E2E  | `test_p4_draft_live.py` **3 passed**（提交 `93dd082`）：真实 JWT `ZR20050012` + LongCat 真实模型（单次 20~25s）+ zrcrm 正式写入——客户建档写入并回 `formal_id`、重复确认幂等返回同一 id、同名真实客户 `MATCHED` 且确认被拒并给「改为补增」提示、线索建档写入。**不含**：活动/任务侧、响应丢失、撤权、跨用户。                                                                                                                                                                                                                                                                                                                                                                       |
+| 10-02 H5 联调端    | `tests/h5/index.html` + `scripts/h5_server.py`：账号密码登录（服务端密码授权，client_secret 不出本机）→ `GET /__session` 200、`POST /__login` 200（token 3600s）、`/crm/**` 同源代理 `capabilities`/`candidates`(GET+POST)/`conversations` 均 200、未登录返回 401。属联调工具验证，**不是浏览器级功能验收，也不是生产 H5 验收**。                                                                                                                                                                                                                                                                                                                         |
+| 10-02 ASR       | `scripts/asr_poc.py` 官方公网单人样例三步链路（提交→轮询→下载转写）通过，含全文/时间锚点/说话人字段（paraformer-v2，`sk-ws-` 业务空间 Key）。OSS 本地文件上传链路未验。                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 10-07 附件契约      | CRM `service_dev_ai@881878e`（= master 0a5dd8e + 附件组件提交）+ AI 侧 crm.py 客户端：`test_p5_file_contract.py` 8 项（含 P4 回归共 13 passed）；Flyway **V049**（resource_info）在 dev 库执行登记（checksum 362394189，同轮补应用 V048）；端到端烟测 **16 场景**通过——上传登记/元数据/下载/AI HMAC 访问/inline 字节/跨用户归一 found=false/撤权后下载 403+access.type=none/不存在归一/错误密钥 401（local 存储模式、18081 实例、`ZR20050012` JWT；脚本 `.local/smoke_resource.py` 不入库，场景见需求 12.5）。**不含**：真实 OSS 上传（B-4）、ASR/OCR 供应商调用、生产 H5。                                                                                                                                        |
+| 10-08 P1 加固     | 隔离 Python 3.13 venv（editable 安装）跑 `python -m pytest tests/ -m "not realpg and not draftlive and not crmlive" -q`：**157 passed、119 deselected**（加固前同口径 140 passed，新增 17 项 `tests/test_p1_hardening.py`，无回归）。覆盖：结果版本透出、输入上限、错误脱敏、MCP 出站守卫（含私网/白名单/重定向）。**不含**真实 PG 分支（deselect）、真实供应商调用、CRM 写入。                                                                                                                                                                                                                                                                                             |
+| 10-08 跨仓骨架      | `sales-crm-api-service@service_dev_ai`（工作区 4c15d57 + 未提交改动）：`mvn -o -q -DskipTests -pl salescrm-model,salescrm-service,salescrm-service-impl,salescrm-api -am compile` 通过（离线、仅编译，未跑测试、未启动实例、未执行 Flyway）。改动：对象会话准入校验、候选 `_ai_version` 快照、确认版本守卫。**不等于**运行验收：运行的 :18080/:18081 仍是旧 JAR。                                                                                                                                                                                                                                                                                                     |
+| 10-09 复测        | ① AI 侧同口径 `pytest tests/ -m "not realpg and not draftlive and not crmlive" -q` → **180 passed、124 deselected**（较 10-08 的 157 增加，含并发协作者新增用例；本轮 `test_p1_hardening.py` 17 项单独复跑全绿）。② 新增 `tests/test_p1_hardening_db.py`（5 项，标 `realpg`）：验证"真的写库"时结果版本透出、超限 413 不入队、图内/落库阶段异常脱敏后才进 `ai_runs.error`。③ CRM Java：`AiIntegrationServiceGuardTest`（8 项，纯 Mockito）经 `javac` + `JUnitCore` 直跑 **OK (8 tests)**——覆盖对象会话无权/不存在/不支持类型拒绝、可读时透传、确认版本不一致在任何写入前 409、版本一致走 `ai:run:item` 幂等键、`listMyCandidates` 透出 `result_version`。**注意**：`mvn test` 在本机被全局跳过（surefire 无报告），故用 `JUnitCore` 直跑，见 12.2 环境说明。 |
+| 10-09 realpg 阻塞 | 本机沙箱**禁止派生 `postgres.exe`**：`initdb` 直接报 `popen failure: No error` + `program "postgres" ... not found`（真实二进制在 `activestate/cache/b5278c95/usr/bin`，`cache/bin` 下三个同尺寸 shim 均指向它）。且沙箱删除钩子拦截 `conftest` 的 `shutil.rmtree(.local/pg-test)`（trash 失败→目录残留非空→initdb 二次报错）。结论：**`realpg` 分支本轮无法在本环境运行，是环境限制而非代码缺陷**；`test_p1_hardening_db.py` 仅完成收集、未执行。恢复条件：可沙箱外启动本地 PG 的终端，或 `SAI_PG_BIN` 指向可派生 `postgres` 的目录。                                                                                                                                                                              |
+| 10-07 识别编排      | AI 库迁移 0005 `ai_file_recognitions` + `app/persistence/recognition.py` + `app/enhanced_input.py`：`test_p5_enhanced_pipeline.py` **9 passed**（真实 PG + Stub 适配器）——复用键（文件+版本+处理类型+配置指纹）命中后不再调供应商、失败/取消状态流转、分阶段 StageError 落库、ASR 时间锚点与 OCR 区域锚点进 evidence、URL 不落库、local 模式 ASR 显式失败。同日全量非写入套件 **215 passed, 10 deselected**（含上述新测试）。**不含**：真实 ASR/OCR 调用、Run 图接入、LLM 整理阶段。                                                                                                                                                                                                                    |
 
 上述不同日期/范围数量不可相加当作当前全量测试数。最初 ASR/OCR Mock 测试 20 passed 与后续 OCR 测试记录也不可视为不同用例累计。
 
@@ -246,7 +279,7 @@ OCR 看区域锚点、数字/日期及模糊/大图错误；ASR 看时间锚点�
 .\.venv\Scripts\python.exe -m pytest tests/test_p5_analysis.py tests/test_p5_knowledge.py -m "not realpg" -q
 ```
 
-测试安全：`conftest` 会停止/清理 `.local/pg-test`；真实 CRM 写入测试仅在显式启用并提供有效 JWT 时运行，仍须先确认目标环境与授权。不与其他智能体共用实例跑破坏性 fixture；不得仅为文档勾选运行全套。
+测试安全：`conftest` 会停止/清理 `.local/pg-test`；本机沙箱下该清理与 `postgres.exe` 派生会被拦截，跑 `realpg` 前先确认执行终端可沙箱外启动 PG（详见 12.2 环境阻塞）。真实 CRM 写入测试仅在显式启用并提供有效 JWT 时运行，仍须先确认目标环境与授权。不与其他智能体共用实例跑破坏性 fixture；不得仅为文档勾选运行全套。
 
 ### 12.2 跨仓库迁移与仍开放门槛
 
@@ -254,7 +287,10 @@ OCR 看区域锚点、数字/日期及模糊/大图错误；ASR 看时间锚点�
 - V010 重号已收敛至 `V018__ai_agent_candidates.sql`（confirmed_by_id）、`V019__work_tasks_extract.sql`（customer_id/ai_candidate_id/idempotency_key 与部分唯一索引）；10-01 记录在 zrcrm 执行并登记 Flyway rank 19/20、核对 LineChecksum。
 - 该环境历史设置 validate-on-migrate=false，不是新环境推荐配置或跳过校验的授权。V025 为建档候选扩展（避让既有 V020–V024）；各环境部署须核实脚本与迁移历史，不能照搬手工登记。
 - 已解决的旧问题不再作为阻塞：GET/POST 事实接口不一致、V010 重号、最早 100 条历史、同会话固定请求键、生命周期入口遗漏、v9/v10 字符串版本排序。
-- **仍开放**：模板复用/许可证清单；跨仓库版本矩阵（H5 前端待移动端团队产出）；全部恢复入口 state_version 与旧 checkpoint 升级；当前权限下完整历史/摘要处理；同名匹配/override 客户权限及对象状态；**活动确认写入与 ActivityService 统一（C-3：ActivityService 已存在 page/create，AI confirmRun 仍 Mapper 直插）**；候选/来源/结果版本快照；负责人/活动时间默认值显式确认；审计/正式写入事务边界；**来源对象撤权业务流（C-2：文件撤权链路已闭环，来源对象撤权未实现）**；活动/任务侧与建档同等级的真实闭环；OSS 生产凭据与真实上传→ASR 联调（环境类，用户部署时解决）；ASR/OCR→LLM 剩余细化（姓名/专名核对、用户最终文本持久化）；真实 H5（前端产出后）与增强输入闭环。（已闭合不再列为开放：确认勾选集合 `item_ids`、稳定客户端请求键、客户同名匹配走数据范围——见第 6 节 2026-10-02 记录；P5 文件边界契约与 CRM 附件组件——见需求 12.5；**响应丢失对账（C-1）——幂等重放覆盖，2026-10-07**；**识别→整理编排（D-2）——0005/enhanced_input/organize/Run 接入落地**；**生产 H5 形态（A-1）——api-service 设计文档 + 后端底座，2026-10-07**。）
+- **2026-10-08 已闭合（本轮实现，证据见 12.1）**：AI 侧 Run `result_version` 透出；Run 入参/补参容量上限；错误信息脱敏（`ai_runs.error` 与 `status_history`）；MCP 出站私网/回环/凭据外泄与重定向防护；CRM 侧对象会话**建会话时**的准入校验；候选/确认版本快照骨架（含 409 冲突）。
+- **2026-10-08 新增开放**：对象会话**每轮发消息**时重新鉴权（CRM 不落会话，需先补 AI 会话详情代理或 CRM 会话绑定表）；`_ai_version` 由 JSON 节点提升为独立列并纳入 Flyway；确认时与 AI 侧**当前** `result_version` 比对（需额外 `getRun`）；MCP 出站 DNS rebinding 窗口；CRM 验收测试由 JDBC 改表升级为 Controller→Service；**CRM PC 前端 `src/api/crm/ai.js` 缺失（P0，需在 PC 仓补齐并验证构建，AI 侧不得伪造）**。
+- **仍开放**：模板复用/许可证清单；跨仓库版本矩阵（H5 前端待移动端团队产出）；全部恢复入口 state_version 与旧 checkpoint 升级；当前权限下完整历史/摘要处理；同名匹配/override 客户权限及对象状态；活动正式 Service 路径的真实权限/审计/幂等验收；候选/来源/结果版本快照；负责人/活动时间默认值显式确认；审计/正式写入事务边界；**来源对象撤权业务流（C-2：文件撤权链路已闭环，来源对象撤权未实现）**；活动/任务侧与建档同等级的真实闭环；OSS 生产凭据与真实上传→ASR 联调（环境类，用户部署时解决）；ASR/OCR→LLM 剩余细化（姓名/专名核对、用户最终文本持久化）；真实 H5（前端产出后）与增强输入闭环。（已闭合不再列为开放：确认勾选集合 `item_ids`、稳定客户端请求键、客户同名匹配走数据范围——见第 6 节 2026-10-02 记录；P5 文件边界契约与 CRM 附件组件——见需求 12.5；**响应丢失对账（C-1）——幂等重放覆盖，2026-10-07**；**识别→整理编排（D-2）——0005/enhanced_input/organize/Run 接入落地**；**生产 H5 形态（A-1）——api-service 设计文档 + 后端底座，2026-10-07**。）
+- **2026-10-09 环境阻塞（非代码问题）**：① 本机沙箱禁止派生 `postgres.exe`，`realpg` 套件无法起临时实例（`initdb: popen failure`）；② 沙箱删除钩子拦截 `conftest` 对 `.local/pg-test` 的 `shutil.rmtree`，失败后目录残留非空，二次触发 initdb 报错——需先手动停实例并把目录改名腾空，或改用可沙箱外运行的终端；③ 本机 `mvn test` 被全局跳过（`surefire-reports` 为空），Java 测试须用 `javac` 编译到 `target/test-classes` 后以 `java -cp ... org.junit.runner.JUnitCore` 直跑。以上均为本地执行环境限制，不改变代码结论。
 - CRM 测试必须走 Controller/Service 并断言合法样本确实创建正式对象且重复请求返回相同 ID；直接改库置 INVALID、只比 JSON 或允许全部写入失败，不算撤权/版本/闭环通过。
 
 ### 12.3 文档职责与清理记录
@@ -262,6 +298,7 @@ OCR 看区域锚点、数字/日期及模糊/大图错误；ASR 看时间锚点�
 docs 维护两份主文档 + 两份辅助说明：需求保存“做什么、边界和契约”，实施计划保存“怎么做、进度、验收与联调”，[测试规范](测试规范.md)（2026-10-02 新增）保存环境/账号/标准命令/额度注意事项，[开放项待确认清单](开放项待确认清单.md)（2026-10-03 新增）保存需人决策/外部资源/跨仓配合的阻塞项与确认顺序——确认结果回写对应章节，不留在该清单内。新增需求更新对应章节，不继续累积日期型评审/手册。
 
 2026-10-02 已归并后删除的六份受 Git 跟踪文档：
+
 - 移动端PRD对齐建议-2026-09-29.md、移动端PRD对齐-AI侧落实-2026-09-30.md、移动端PRD-V2.6复核对齐-2026-10-01.md → 需求第 11 节、计划 P3/P-MOBILE/本节。
 - P4-双端集成契约.md → 需求第 13 节、计划 P4/12.2。
 - ASR-OCR联调手册.md → 需求第 12 节、计划第 7 节。

@@ -3,8 +3,8 @@
 查找顺序：显式路径 > SAI_CONFIG 环境变量（仅指路径，非密钥）> ./conf/config.yml >
 项目根 conf/config.yml；都缺失时用默认值（测试/冒烟可直接构造）。
 
-密钥有两个来源，互不冲突：config.yml（本身不入库，只提交 .example），
-或环境变量（见 _SECRET_ENV_OVERRIDES，优先级更高，推荐用于部署注入）。
+密钥有三个来源，优先级从低到高：config.yml 明文 < secrets.ui.yml（后台写入）
+< 环境变量（见 _SECRET_ENV_OVERRIDES，推荐用于部署注入）。
 密钥一律不进日志与代码。
 """
 from __future__ import annotations
@@ -16,6 +16,8 @@ from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
+
+from app.net_guard import OutboundUrlRejected, assert_public_https_url
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATHS = (Path("conf/config.yml"), PROJECT_ROOT / "conf" / "config.yml")
@@ -47,6 +49,40 @@ class CrmSettings(BaseModel):
     key_id: str = "ai-crm"
     secret: str = ""
     timeout_seconds: float = 10.0
+
+
+class ResearchMcpProvider(BaseModel):
+    enabled: bool = False
+    url: str = ""
+    api_key: str = ""
+    tool_name: str = ""
+    query_argument: str = "query"
+    timeout_seconds: float = Field(default=20.0, gt=0, le=60)
+    # 出站主机白名单（精确主机或父域）。留空表示不额外限制，但私网/回环地址始终拒绝。
+    # 该字段不开放给配置后台编辑，避免管理员自行放行任意地址。
+    allowed_hosts: list[str] = Field(default_factory=list)
+
+
+class ResearchSettings(BaseModel):
+    bocha: ResearchMcpProvider = Field(default_factory=ResearchMcpProvider)
+    qichacha: ResearchMcpProvider = Field(default_factory=ResearchMcpProvider)
+
+    @model_validator(mode="after")
+    def _validate_outbound_urls(self) -> "ResearchSettings":
+        """启动即拒绝明显危险的出站地址（不做 DNS，避免启动依赖外部解析）。
+
+        真正的解析级校验（域名指向私网）在每次出站前执行，见 app/net_guard.py。
+        """
+        for name, provider in (("bocha", self.bocha), ("qichacha", self.qichacha)):
+            if not provider.enabled or not provider.url:
+                continue
+            try:
+                assert_public_https_url(
+                    provider.url, allowed_hosts=provider.allowed_hosts, resolve=False
+                )
+            except OutboundUrlRejected as exc:
+                raise SettingsError(f"research.{name}.url 不允许出站: {exc}") from None
+        return self
 
 
 class AsrSettings(BaseModel):
@@ -141,6 +177,18 @@ class PlaygroundSettings(BaseModel):
     operator_user_name: str = "开发联调"
 
 
+class AdminSettings(BaseModel):
+    """配置后台（/admin 页面与其后台 API）的开关。
+
+    - `enabled`：总开关。关闭时页面与后台 API 一律 404。
+    - `allow_prod`：生产环境放行开关。生产默认不暴露管理面；
+      确需在生产维护配置时显式置 true，并只限内网访问。
+    """
+
+    enabled: bool = True
+    allow_prod: bool = False
+
+
 class ApiSettings(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8310
@@ -162,7 +210,27 @@ _SECRET_ENV_OVERRIDES: dict[str, str] = {
     "oss.access_key_secret": "SAI_OSS_ACCESS_KEY_SECRET",
     "oss.endpoint": "SAI_OSS_ENDPOINT",
     "oss.bucket": "SAI_OSS_BUCKET",
+    "research.bocha.api_key": "SAI_BOCHA_MCP_API_KEY",
+    "research.qichacha.api_key": "SAI_QICHACHA_MCP_API_KEY",
 }
+
+# 布尔开关的环境变量覆盖表（部署侧可不改 config.yml 就开关后台）。
+_BOOL_ENV_OVERRIDES: dict[str, str] = {
+    "admin.enabled": "SAI_ADMIN_ENABLED",
+    "admin.allow_prod": "SAI_ADMIN_ALLOW_PROD",
+}
+
+_TRUE_WORDS = {"1", "true", "yes", "on"}
+_FALSE_WORDS = {"0", "false", "no", "off"}
+
+
+def _parse_bool_env(raw: str) -> bool | None:
+    value = raw.strip().lower()
+    if value in _TRUE_WORDS:
+        return True
+    if value in _FALSE_WORDS:
+        return False
+    return None
 
 
 class Settings(BaseModel):
@@ -175,6 +243,7 @@ class Settings(BaseModel):
     model: ModelSettings = Field(default_factory=ModelSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     crm: CrmSettings = Field(default_factory=CrmSettings)
+    research: ResearchSettings = Field(default_factory=ResearchSettings)
     # 增强输入（P5 需求 4.12/4.13）：默认关闭，凭据齐备后显式开启
     asr: AsrSettings = Field(default_factory=AsrSettings)
     ocr: OcrSettings = Field(default_factory=OcrSettings)
@@ -182,6 +251,7 @@ class Settings(BaseModel):
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     conversations: ConversationsSettings = Field(default_factory=ConversationsSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
+    admin: AdminSettings = Field(default_factory=AdminSettings)
 
     log_level: str = "INFO"
 
@@ -191,16 +261,23 @@ class Settings(BaseModel):
         """用环境变量覆盖密钥类配置（环境变量优先于配置文件）。"""
         if not isinstance(data, dict):
             return data
-        for dotted, env_name in _SECRET_ENV_OVERRIDES.items():
-            value = os.environ.get(env_name)
-            if not value:
-                continue
-            section, field = dotted.split(".", 1)
-            current = data.get(section)
-            if isinstance(current, dict):
-                current[field] = value
-            else:
-                data[section] = {field: value}
+        for table, parse in ((_SECRET_ENV_OVERRIDES, None), (_BOOL_ENV_OVERRIDES, _parse_bool_env)):
+            for dotted, env_name in table.items():
+                raw = os.environ.get(env_name)
+                if not raw:
+                    continue
+                value: Any = raw if parse is None else parse(raw)
+                if value is None:
+                    continue
+                target = data
+                parts = dotted.split(".")
+                for part in parts[:-1]:
+                    child = target.get(part)
+                    if not isinstance(child, dict):
+                        child = {}
+                        target[part] = child
+                    target = child
+                target[parts[-1]] = value
         return data
 
     @model_validator(mode="after")
@@ -251,23 +328,54 @@ class Settings(BaseModel):
             ]
             if missing_oss:
                 raise SettingsError(f"oss.enabled=true 时缺少配置: {', '.join(missing_oss)}")
+        for name, provider in (("bocha", self.research.bocha), ("qichacha", self.research.qichacha)):
+            if provider.enabled:
+                if not provider.url.startswith("https://") or not provider.api_key or not provider.tool_name:
+                    raise SettingsError(f"research.{name} 启用时必须配置 HTTPS url、api_key 和 tool_name")
         return self
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Settings":
         """从 YAML 加载；找不到文件时返回默认值（不报错，供测试/冒烟）。"""
         for candidate in _candidates(path):
-            data: dict[str, Any] = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-            return cls(**data)
+            return cls(**read_config_data(candidate))
         return cls()
 
     @classmethod
     def load_existing(cls, path: str | Path | None = None) -> tuple["Settings", Path | None]:
         """加载并返回实际使用的配置文件（预检用：缺失时显式报告）。"""
         for candidate in _candidates(path):
-            data: dict[str, Any] = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-            return cls(**data), candidate
+            return cls(**read_config_data(candidate)), candidate
         return cls(), None
+
+
+def overlay_path(config_path: Path) -> Path:
+    return config_path.with_name("config.ui.yml")
+
+
+def read_config_data(config_path: Path) -> dict[str, Any]:
+    """基础配置 → 后台非密钥覆盖 → 后台密钥 → 启用连接映射。
+
+    顺序即优先级：后者覆盖前者。连接列表最后执行，保证「列表里启用的那条」
+    才是运行期真相。环境变量覆盖发生在 Settings 的 before 校验器里，
+    仍高于所有文件层。
+    """
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise SettingsError("config.yml 顶层必须是对象")
+    return data
+
+
+def _load_layer(path: Path, label: str) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    raw = path.read_text(encoding="utf-8")
+    if not raw.strip():
+        return {}
+    values = yaml.safe_load(raw) or {}
+    if not isinstance(values, dict):
+        raise SettingsError(f"{label} 顶层必须是对象")
+    return values
 
 
 def _candidates(path: str | Path | None) -> list[Path]:

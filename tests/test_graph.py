@@ -19,6 +19,8 @@ async def test_complete_text_builds_candidates():
     result = final["result"]
     assert result["candidates"]["tasks"][0]["title"] == "电话回访"
     assert result["candidates"]["tasks"][0]["due_date"] == "2026-10-01"
+    assert result["candidates"]["customers"] == ["ACME公司"]
+    assert result["summary"]
     assert "本人确认" in result["notes"]
 
 

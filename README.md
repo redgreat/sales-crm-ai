@@ -12,17 +12,26 @@
 - P0/P1/P2/P3/P4 核心已实现并通过真实 PostgreSQL 测试：单轮抽取图（Stub 模型）、持久 checkpoint、
   Run 队列/租约/执行代次、interrupt/resume 多轮补参、会话绑定、签名认证与防重放、usage 剥离。
 - P4 CRM 集成薄层已实现：候选导入/确认写入/幂等/权限验证，真实模型（LongCat）实测通过。
-- 配置统一放 `conf/config.yml`（复制 `conf/config.yml.example` 填写，含密钥不入库）；
-  可用 `SAI_CONFIG` 指定其他路径。不用环境变量文件。
-- 联调前端 `frontend/`（Svelte 5 + Tailwind v4 + shadcn-svelte）：沟通抽取、会话多轮补参、
-  Run 查询；未实现能力明确标记。浏览器不持密钥——前端经 `/playground/api` 开发代理访问，
-  服务端注入固定联调身份并签名；仅 dev/test 且 `api.playground.enabled` 时生效，生产 404 且拒绝启动。
+- 配置基础文件为 `conf/config.yml`（复制 `conf/config.yml.example` 填写，含密钥不入库）；
+  5174 配置后台将非密钥修改写入忽略文件 `conf/config.ui.yml`，重启 AI 服务后生效。
+  密钥仍由基础文件或环境变量注入，不传到浏览器。可用 `SAI_CONFIG` 指定其他基础配置路径，
+  但非本仓 `conf/config.yml` 时后台只读拒绝保存。
+- 独立配置后台 `frontend/`（Svelte 5 + Tailwind v4 + shadcn-svelte）：管理模型、CRM、ASR/OCR/OSS
+  和企业查询 MCP 的非密钥参数（配置全部入库）。产物为静态 SPA，**已随 Docker 镜像发布**，
+  由 API 同端口挂在 `/admin`（容器访问 `http://<host>:8310/admin`），无需单独部署前端。
+  开关：`admin.enabled`（总开关）+ `admin.allow_prod`（生产放行，默认关闭）；非生产环境还需
+  `api.playground.enabled=true`。开发时 `npm run dev` 访问 `http://localhost:5173/admin/`。
+  业务链路继续使用 `tests/h5/` 联调页。
 - CI：`.github/workflows/ci.yml` —— 测试随 push 到 main / PR / `workflow_dispatch` 运行；
   多阶段 Docker 构建（前端编译 + Python 运行时）→ 推送 GHCR 与 Quay **仅在推送 `v*` 标签或手动触发时执行**
   （`ghcr.io/<owner>/<repo>`、`quay.io/zrcrm/sales-crm-ai`：latest / sha / 语义版本 tag；
   Quay 需配置 `QUAY_USERNAME`/`QUAY_PASSWORD` secrets）。
 - 镜像发布：`scripts\dockerbuild.ps1`（或 bash 版 `scripts/dockerbuild.sh`）自动计算下一个 `v*` 标签
   并推送，由 CI 完成构建与 GHCR + Quay 双仓库发布。
+- 代码同步 GitLab：`scripts\sync-gitlab.ps1`（bash 版 `scripts/sync-gitlab.sh`）双向同步私有镜像仓
+  `gitlab.lunz.cn`：默认推送当前分支（可选 `-Tags` / `-All`），`-Pull` 从 GitLab 拉取远端分支并合并到本地；
+  首次用 `-Url` 配置 remote，凭据走 Git 凭据管理器或 `GITLAB_USERNAME`/`GITLAB_PASSWORD` 环境变量（不落盘），
+  主仓库仍是 GitHub。
 - 测试命令：`.venv\Scripts\python -m pytest tests/ -v`（conftest 自动在 `.local/pg-test` 起临时
   PostgreSQL；找不到 initdb 时真实库测试显式 skip，不伪造通过）。
 - 快速开始：复制 `conf/config.yml.example` 为 `conf/config.yml` → `scripts\init_db.py --apply` →

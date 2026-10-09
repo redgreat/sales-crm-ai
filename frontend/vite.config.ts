@@ -6,16 +6,35 @@ import process from 'node:process';
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
-		sveltekit({
-			compilerOptions: {
-				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
-				runes: ({ filename }) => filename.split(/[/\\]/).includes('node_modules') ? undefined : true
+		// 后台挂载在 /admin 下，开发时访问根路径直接跳过去，避免 404 困惑
+		{
+			name: 'admin-base-redirect',
+			configureServer(server) {
+				server.middlewares.use((req, res, next) => {
+					if (req.url === '/' || req.url === '' || req.url === '/admin') {
+						res.writeHead(302, { Location: '/admin/' });
+						res.end();
+						return;
+					}
+					next();
+				});
 			}
-		})
+		},
+		// 不传参：传了会让 SvelteKit 忽略 svelte.config.js（adapter / paths 失效）
+		sveltekit()
 	],
 	server: {
 		proxy: {
-			// 开发环境把联调代理转发到 AI API（生产同源部署或经 CRM 网关）
+			// 后台接口同源直连（生产由 FastAPI 自身提供，开发转发到 AI 服务）
+			'/api': {
+				target: process.env.AI_API_URL ?? 'http://127.0.0.1:8310',
+				changeOrigin: true
+			},
+			// 健康检查 + H5 联调代理
+			'/health': {
+				target: process.env.AI_API_URL ?? 'http://127.0.0.1:8310',
+				changeOrigin: true
+			},
 			'/playground': {
 				target: process.env.AI_API_URL ?? 'http://127.0.0.1:8310',
 				changeOrigin: true

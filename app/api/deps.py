@@ -1,13 +1,19 @@
-"""公共依赖：服务间认证（签名 + 时效 + 防重放）与操作者上下文。
+"""公共依赖：服务间认证（签名 + 时效 + 防重放）与操作者上下文；
+外加配置后台的会话鉴权（Bearer Token + 权限点）。
 
 每轮请求重新鉴权；operator 不落浏览器、不可由其任意指定身份字段以外的范围。
 """
 from __future__ import annotations
 
-from fastapi import Request
+from typing import Any
 
+from fastapi import Depends, Request
+
+from app.admin import repo
+from app.admin.session import verify_token
+from app.admin.users import role_permissions
 from app.auth import OperatorContext, verify_signed_request
-from app.errors import Unauthenticated
+from app.errors import Forbidden, NotFound, Unauthenticated
 from app.persistence.nonces import register_nonce
 
 
@@ -46,3 +52,41 @@ async def require_operator(request: Request) -> OperatorContext:
     if verified.operator is None:
         raise Unauthenticated("缺少操作者身份")
     return verified.operator
+
+
+def _bearer_token(request: Request) -> str:
+    header = request.headers.get("authorization", "")
+    return header[7:].strip() if header.lower().startswith("bearer ") else ""
+
+
+async def require_session(request: Request) -> dict[str, Any]:
+    """管理端会话：Token 签名/过期 + 账号仍可用 + token_version 未被改动作废。"""
+    settings = request.app.state.settings
+    secret = settings.auth.service_secret
+    if not secret:
+        raise Unauthenticated("服务端未配置 auth.service_secret，管理端未启用")
+    token = _bearer_token(request)
+    if not token:
+        raise Unauthenticated("未登录")
+    claims = verify_token(secret, token, version_check=False)
+    if claims is None:
+        raise Unauthenticated("登录已过期，请重新登录")
+    account = await repo.find_user(request.app.state.pool, claims["id"])
+    if account is None or account.get("disabled"):
+        raise Unauthenticated("账号已停用或不存在")
+    if int(account.get("token_version", 1)) != claims["ver"]:
+        raise Unauthenticated("口令已变更，请重新登录")
+    claims["permissions"] = role_permissions(str(account.get("role", "viewer")))
+    return claims
+
+
+def require_permissions(*permissions: str):
+    """写接口一律二次校验权限点——前端隐藏按钮只是体验，不是安全边界。"""
+
+    async def _guard(session: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
+        missing = [item for item in permissions if item not in session["permissions"]]
+        if missing:
+            raise Forbidden(f"当前角色缺少权限：{', '.join(missing)}")
+        return session
+
+    return _guard

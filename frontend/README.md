@@ -1,42 +1,11 @@
-# sv
+# AI 配置后台
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+开发/测试环境独立入口：`http://127.0.0.1:5174/`。页面管理模型、外部接口和企业查询 MCP 的非密钥参数；请求经同源 `/playground/api` 代理到 AI 服务。生产环境不开放此管理接口。
 
-## Creating a project
+密钥不进入浏览器，仍在 `conf/config.yml` 或部署环境变量中注入。页面保存的设置位于忽略文件 `conf/config.ui.yml`，重启 AI 服务后生效。若使用仓库外的 `SAI_CONFIG`，配置后台拒绝写入。
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
+```bash
+npm ci
+npm run dev -- --host 127.0.0.1 --port 5174
+npm run check
 ```
-
-To recreate this project with the same configuration:
-
-```sh
-# recreate this project
-npx sv@0.17.1 create --template minimal --types ts --add tailwindcss="plugins:none" --no-download-check --no-install frontend
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
