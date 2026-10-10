@@ -13,14 +13,25 @@
 #   4. 验证：curl -f http://127.0.0.1:8310/ready （schema/checkpoint/model 三项须 ok）
 #      后台页面：http://127.0.0.1:8310/admin （已打包进镜像，无需额外部署前端）
 #
+# 更新重新部署（服务器上执行，详见脚本头注释）：
+#   ./scripts/redeploy.sh                 # 拉最新镜像并重启（默认不动数据库）
+#   ./scripts/redeploy.sh --tag v1.2.3    # 部署指定版本
+#   ./scripts/redeploy.sh --migrate       # 重启前应用数据库迁移
+#
 # 单容器同时运行 API 与 worker（uvicorn lifespan 受管，worker.enabled 控制）。
 # 数据库用外部 PostgreSQL（生产建议托管实例，如阿里云 RDS——库部署/备份由云托管负责）；
 # 如需临时本地库，用 `docker compose --profile local-db up -d` 额外拉起 postgres，
 # 并把 database_url 指向 postgres:5432。
+#
+# 资源与日志：默认 2 核 / 2G（reservation 512m），可用环境变量按服务器规格覆盖：
+#   SAI_CPUS=4.0 SAI_MEM_LIMIT=4G SAI_MEM_RESERVATION=1G docker compose up -d
+# 日志走容器 json-file 轮转（10m × 3），不落盘到宿主目录；
+# 健康状态由镜像内 HEALTHCHECK 提供，编排里不再重复定义。
 
 services:
   sales-crm-ai:
-    image: quay.io/zrcrm/sales-crm-ai:latest
+    # 标签可用 SAI_IMAGE_TAG 覆盖（默认 latest）：scripts/redeploy.sh --tag v1.2.3
+    image: quay.io/zrcrm/sales-crm-ai:${SAI_IMAGE_TAG:-latest}
     container_name: sales-crm-ai
     hostname: sales-crm-ai
     restart: unless-stopped
@@ -40,3 +51,23 @@ services:
       SAI_CONFIG: /app/conf/config.yml
     volumes:
       - ./conf/config.yml:/app/conf/config.yml:ro
+    # 资源上限（cpus/mem_limit 为 compose v2 立即生效写法，deploy 段供 swarm/新版 compose 使用）
+    cpus: ${SAI_CPUS:-2.0}
+    mem_limit: ${SAI_MEM_LIMIT:-2G}
+    mem_reservation: ${SAI_MEM_RESERVATION:-512m}
+    deploy:
+      resources:
+        limits:
+          cpus: ${SAI_CPUS:-2.0}
+          memory: ${SAI_MEM_LIMIT:-2G}
+        reservations:
+          memory: ${SAI_MEM_RESERVATION:-512m}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

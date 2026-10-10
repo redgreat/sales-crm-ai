@@ -250,4 +250,6 @@ scripts/*
 # GitLab 镜像仓同步脚本：凭据走环境变量/凭据管理器，不含密钥
 !scripts/sync-gitlab.ps1
 !scripts/sync-gitlab.sh
+# 服务器重新部署脚本：不含密钥
+!scripts/redeploy.sh
 .archify/

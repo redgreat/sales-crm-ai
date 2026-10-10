@@ -6,9 +6,13 @@
 # 镜像来源见 docker-compose.yml：quay.io/zrcrm/sales-crm-ai（标签默认 latest）。
 # 镜像由 CI 监听 v* 标签构建发布，打标签推送用 scripts/dockerbuild.sh。
 #
+# 部署目录自动定位：优先脚本同级目录的 docker-compose.yml，其次脚本所在目录的上一级
+# （脚本留在仓库 scripts/ 目录时，上一级即项目根）。端口 8310、标签 latest 均为脚本内固定值，
+# 不读取任何环境变量；部署目录可用 --dir 显式覆盖。
+#
 # 用法: ./scripts/redeploy.sh [选项]
-#   --dir <路径>     部署目录（默认 /root/sales-crm-ai，可用环境变量 SAI_DEPLOY_DIR 覆盖）
-#   --tag <标签>     镜像标签（默认 latest，导出为 SAI_IMAGE_TAG 供 compose 插值）
+#   --dir <路径>     部署目录（默认自动定位，见上）
+#   --tag <标签>     镜像标签（默认 latest）
 #   --migrate        同时应用数据库迁移（init_db.py --apply + init_checkpoints.py --apply）
 #   --no-prune       跳过清理悬空镜像（悬空镜像指 <none> 标签的旧层）
 #   --wait <秒>      健康检查最长等待时间（默认 60 秒，0 表示不等待）
@@ -21,11 +25,14 @@
 
 set -euo pipefail
 
-DEPLOY_DIR="${SAI_DEPLOY_DIR:-/root/sales-crm-ai}"
-IMAGE_TAG="${SAI_IMAGE_TAG:-latest}"
+# 部署目录自动定位：docker-compose.yml 与脚本同级时用它，否则取脚本所在目录的上一级
+# （脚本留在仓库 scripts/ 目录时，上一级即项目根）。不读取任何环境变量。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_DIR=""
+IMAGE_TAG="latest"
 SERVICE="sales-crm-ai"
 CONTAINER="sales-crm-ai"
-PORT="${SAI_PORT:-8310}"
+PORT=8310
 MIGRATE=0
 PRUNE=1
 WAIT_SECONDS=60
@@ -42,12 +49,26 @@ success() { printf '%s✔ %s%s\n' "$C_OK" "$*" "$C_OFF"; }
 warn()    { printf '%s⚠ %s%s\n' "$C_WARN" "$*" "$C_OFF"; }
 error()   { printf '%s✖ %s%s\n' "$C_ERR" "$*" "$C_OFF" >&2; }
 
+detect_deploy_dir() {
+  if [ -f "$SCRIPT_DIR/docker-compose.yml" ] || [ -f "$SCRIPT_DIR/docker-compose.yaml" ]; then
+    printf '%s' "$SCRIPT_DIR"
+    return
+  fi
+  local parent
+  parent="$(dirname "$SCRIPT_DIR")"
+  if [ -f "$parent/docker-compose.yml" ] || [ -f "$parent/docker-compose.yaml" ]; then
+    printf '%s' "$parent"
+    return
+  fi
+  printf ''
+}
+
 show_usage() {
   cat <<'EOF'
 用法: ./scripts/redeploy.sh [选项]
 
 选项:
-  --dir <路径>     部署目录（默认 /root/sales-crm-ai，或环境变量 SAI_DEPLOY_DIR）
+  --dir <路径>     部署目录（默认自动定位：脚本同级或上一级的 docker-compose.yml 所在目录）
   --tag <标签>     镜像标签（默认 latest）
   --migrate        重启前应用数据库迁移（init_db + init_checkpoints）
   --no-prune       跳过清理悬空镜像
@@ -55,6 +76,7 @@ show_usage() {
   -h, --help       显示帮助
 
 说明: 脚本只做「拉新镜像 + 重启」，不会自动改库；需要迁移时显式加 --migrate。
+      部署目录、端口、镜像标签均为脚本内固定值，不读取任何环境变量。
 EOF
 }
 
@@ -78,7 +100,18 @@ if docker compose version >/dev/null 2>&1; then
 else
   DC="docker-compose"
 fi
-export SAI_IMAGE_TAG="$IMAGE_TAG"
+# 只有显式指定标签时才导出给 compose 插值，默认走 compose 里的 latest
+if [ "$IMAGE_TAG" != "latest" ]; then
+  export SAI_IMAGE_TAG="$IMAGE_TAG"
+fi
+
+if [ -z "$DEPLOY_DIR" ]; then
+  DEPLOY_DIR="$(detect_deploy_dir)"
+fi
+if [ -z "$DEPLOY_DIR" ]; then
+  error "未在脚本同目录（$SCRIPT_DIR）或其上一级找到 docker-compose.yml，请用 --dir 指定部署目录"
+  exit 1
+fi
 
 printf '%s\n' "=========================================="
 info "开始重新部署 sales-crm-ai 容器环境"

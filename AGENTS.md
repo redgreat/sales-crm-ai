@@ -56,5 +56,6 @@
 - 流程：多阶段 Docker 构建（前端 Node.js → Python 运行时）→ 推送 GHCR 与 Quay（仅 v* 标签 / 手动触发）
 - 镜像：`ghcr.io/redgreat/sales-crm-ai`、`quay.io/zrcrm/sales-crm-ai`（secrets：`QUAY_USERNAME`/`QUAY_PASSWORD`）
 - 发布脚本：`scripts\dockerbuild.ps1` / `scripts/dockerbuild.sh`（自动计算下一个 `v*` 标签并推送，触发 CI 发布镜像）
+- 部署脚本：`scripts/redeploy.sh`（服务器上执行：停容器 → 删旧镜像 → 拉新镜像 → 启动 → 健康检查。默认不改库，需迁移显式加 `--migrate`；指定版本用 `--tag vX.Y.Z`。部署目录自动定位：脚本同级的 docker-compose.yml，否则取上一级；不读环境变量，可用 `--dir` 显式覆盖）
 - 镜像仓同步：`scripts\sync-gitlab.ps1` / `scripts/sync-gitlab.sh`（按需双向同步私有仓 `gitlab.lunz.cn`：推送当前分支/标签，`-Pull` 拉取远端分支并合并到本地；首次 `-Url` 配置 remote，凭据用凭据管理器或 `GITLAB_USERNAME`/`GITLAB_PASSWORD` 环境变量；主仓库仍是 GitHub）
 - 本地测试：`docker build -t sales-crm-ai .`
