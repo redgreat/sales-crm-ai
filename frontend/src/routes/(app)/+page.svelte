@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { base } from '$app/paths';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import PageHeader from '$lib/components/admin/page-header.svelte';
@@ -139,7 +140,7 @@
 									<span class="block text-xs">{spec.label}</span>
 									{#if SECRET_TARGET[spec.path]}
 										<a
-											href={href}
+											href={`${base}${href}`}
 											class="shrink-0 text-xs text-primary underline underline-offset-2"
 										>
 											去连接页填写

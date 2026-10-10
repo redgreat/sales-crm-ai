@@ -24,12 +24,16 @@ def build_chat_model(settings: Settings) -> BaseChatModel:
     if settings.model.provider == "openai_compatible":
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(
-            model=settings.model.name,
-            base_url=settings.model.base_url or None,
-            api_key=settings.model.api_key,
-            temperature=settings.model.temperature,
-            timeout=settings.model.timeout_seconds,
-            max_retries=settings.model.max_retries,
-        )
+        # enable_thinking 非 OpenAI 标准字段，须走 extra_body；null 表示不传（兼容非百炼端点）
+        kwargs: dict = {
+            "model": settings.model.name,
+            "base_url": settings.model.base_url or None,
+            "api_key": settings.model.api_key,
+            "temperature": settings.model.temperature,
+            "timeout": settings.model.timeout_seconds,
+            "max_retries": settings.model.max_retries,
+        }
+        if settings.model.enable_thinking is not None:
+            kwargs["extra_body"] = {"enable_thinking": settings.model.enable_thinking}
+        return ChatOpenAI(**kwargs)
     raise ProviderConfigError(f"未知 model_provider: {settings.model.provider}")
