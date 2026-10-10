@@ -32,6 +32,9 @@ class ModelSettings(BaseModel):
     base_url: str = ""
     api_key: str = ""
     name: str = ""
+    # 百炼/MaaS 深度思考开关。默认关闭：本服务走非流式 + JSON 抽取，开启思考会冲突或变慢。
+    # 非百炼兼容端点若不识别该参数，可在配置里写 enable_thinking: null 表示不传。
+    enable_thinking: bool | None = False
     temperature: float = 0.2
     timeout_seconds: float = 60.0
     max_retries: int = 2

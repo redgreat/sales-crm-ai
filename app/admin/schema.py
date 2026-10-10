@@ -35,7 +35,8 @@ TARGET_LABELS: dict[str, str] = {
 
 # 每个分类的业务字段白名单（id/name/enabled 等通用字段另行处理）
 TARGET_FIELDS: dict[str, tuple[str, ...]] = {
-    "model": ("provider", "base_url", "model", "temperature", "timeout_seconds", "max_retries"),
+    "model": ("provider", "base_url", "model", "enable_thinking", "temperature",
+              "timeout_seconds", "max_retries"),
     "crm": ("base_url", "key_id", "timeout_seconds"),
     "ocr": ("endpoint", "type", "output_coordinate", "timeout_seconds"),
     "asr": ("model", "language_hints", "diarization_enabled"),
@@ -52,6 +53,7 @@ FIELD_TYPES: dict[str, str] = {
     "signed_url_ttl_seconds": "number",
     "language_hints": "list",
     "diarization_enabled": "bool",
+    "enable_thinking": "bool",
 }
 
 # 每个分类的凭据字段（写入 credential JSONB，只写不回显）
@@ -67,9 +69,9 @@ TARGET_SECRETS: dict[str, tuple[str, ...]] = {
 
 # 允许从请求体写入的字段（其余一律拒绝，避免后台被当成任意配置写入口）
 WRITE_FIELDS = ("name", "provider", "base_url", "model", "url", "tool_name", "query_argument",
-                "temperature", "timeout_seconds", "max_retries", "key_id", "endpoint", "type",
-                "output_coordinate", "language_hints", "diarization_enabled", "bucket",
-                "signed_url_ttl_seconds", "target", "enabled", "secrets")
+                "enable_thinking", "temperature", "timeout_seconds", "max_retries", "key_id",
+                "endpoint", "type", "output_coordinate", "language_hints", "diarization_enabled",
+                "bucket", "signed_url_ttl_seconds", "target", "enabled", "secrets")
 
 
 def _target_of(kind: str, payload: dict[str, Any], existing: dict[str, Any] | None) -> str:

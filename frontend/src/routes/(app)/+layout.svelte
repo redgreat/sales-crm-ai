@@ -4,6 +4,7 @@
 	import type { Snippet } from 'svelte';
 	import { adminApi, getToken, setToken, type SessionUser } from '$lib/admin-api';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 
@@ -32,7 +33,7 @@
 
 	onMount(() => {
 		if (!getToken()) {
-			void goto('/login', { replaceState: true });
+			void goto(`${base}/login`, { replaceState: true });
 			return;
 		}
 		void load();
@@ -46,7 +47,7 @@
 			serviceOk = await adminApi.health();
 		} catch {
 			setToken(null);
-			await goto('/login', { replaceState: true });
+			await goto(`${base}/login`, { replaceState: true });
 		} finally {
 			bootstrapping = false;
 		}
@@ -54,12 +55,12 @@
 
 	async function logout() {
 		await adminApi.logout();
-		await goto('/login', { replaceState: true });
+		await goto(`${base}/login`, { replaceState: true });
 	}
 
 	const ROLE_LABEL: Record<string, string> = { admin: '管理员', operator: '运维', viewer: '只读' };
 	let current = $derived($page.url.pathname);
-	let title = $derived(NAV.find((item) => current.startsWith(item.href))?.label ?? '概览');
+	let title = $derived(NAV.find((item) => current.startsWith(`${base}${item.href}`))?.label ?? '概览');
 </script>
 
 <div class="flex min-h-screen bg-background">
@@ -81,9 +82,10 @@
 
 		<nav class="flex-1 space-y-0.5 overflow-y-auto p-2">
 			{#each NAV.filter(visible) as item (item.href)}
-				{@const active = current === item.href || current.startsWith(item.href + '/')}
+				{@const href = `${base}${item.href}`}
+				{@const active = current === href || current.startsWith(href + '/')}
 				<a
-					href={item.href}
+					href={href}
 					onclick={() => (menuOpen = false)}
 					class={`flex items-center gap-2 border-l-2 px-3 py-2 text-xs transition-colors ${
 						active

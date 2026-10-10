@@ -3,7 +3,38 @@ from __future__ import annotations
 
 import json
 
+from app.config import Settings
+from app.providers.factory import build_chat_model
 from app.providers.stub import StubChatModel, parse_user_text, strip_usage_metadata
+
+
+def test_openai_compatible_defaults_enable_thinking_false():
+    """百炼深度思考默认关闭，经 extra_body 传出。"""
+    settings = Settings(
+        model={
+            "provider": "openai_compatible",
+            "base_url": "https://example.maas.aliyuncs.com/compatible-mode/v1",
+            "api_key": "k",
+            "name": "qwen-test",
+        },
+    )
+    assert settings.model.enable_thinking is False
+    model = build_chat_model(settings)
+    assert model.extra_body == {"enable_thinking": False}
+
+
+def test_openai_compatible_omits_enable_thinking_when_null():
+    settings = Settings(
+        model={
+            "provider": "openai_compatible",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "k",
+            "name": "m",
+            "enable_thinking": None,
+        },
+    )
+    model = build_chat_model(settings)
+    assert not model.extra_body
 
 
 def test_parse_full_text():
