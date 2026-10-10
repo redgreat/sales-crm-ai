@@ -18,6 +18,9 @@ model:
   # base_url: https://api.example.com/v1
   # api_key: 占位符-请替换
   # name: your-model-name
+  # 百炼/MaaS 深度思考：默认 false（本服务非流式 + JSON，不适合开思考）。
+  # 需要思考时改为 true（且须改用流式，当前链路未接）；非百炼端点可写 null 表示不传该参数。
+  enable_thinking: false
   temperature: 0.2
   timeout_seconds: 60
   max_retries: 2
