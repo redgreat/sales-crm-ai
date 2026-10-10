@@ -75,7 +75,9 @@ pytest-asyncio==1.4.0
 PyJWT==2.15.1
 python-dotenv==1.2.3
 python-multipart==0.0.32
-pywin32==312
+# Windows-only (local dev / Windows runtime); skipped on Linux and in Docker builds
+# via the platform marker. Keep this file ASCII-only so pip on Windows (GBK locale) can read it.
+pywin32==312; sys_platform == "win32"
 PyYAML==6.0.3
 referencing==0.37.0
 regex==2026.9.10
