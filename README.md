@@ -22,10 +22,11 @@
   开关：`admin.enabled`（总开关）+ `admin.allow_prod`（生产放行，默认关闭）；非生产环境还需
   `api.playground.enabled=true`。开发时 `npm run dev` 访问 `http://localhost:5173/admin/`。
   业务链路继续使用 `tests/h5/` 联调页。
-- CI：`.github/workflows/ci.yml` —— 测试随 push 到 main / PR / `workflow_dispatch` 运行；
-  多阶段 Docker 构建（前端编译 + Python 运行时）→ 推送 GHCR 与 Quay **仅在推送 `v*` 标签或手动触发时执行**
-  （`ghcr.io/<owner>/<repo>`、`quay.io/zrcrm/sales-crm-ai`：latest / sha / 语义版本 tag；
-  Quay 需配置 `QUAY_USERNAME`/`QUAY_PASSWORD` secrets）。
+- CI：`.github/workflows/ci.yml` —— 只做构建与推送，**仅在推送 `v*` 标签或手动触发时运行**（推 main / 提 PR 不触发）；
+   多阶段 Docker 构建（前端编译 + Python 运行时）→ 推送 GHCR 与 Quay
+   （`ghcr.io/<owner>/<repo>`、`quay.io/zrcrm/sales-crm-ai`：latest / sha / 语义版本 tag；
+   Quay 需配置 `QUAY_USERNAME`/`QUAY_PASSWORD` secrets）。测试不在 CI 运行，本地执行：
+   `.venv\Scripts\python -m pytest tests/ -v`（命令见下方「测试命令」）。
 - 镜像发布：`scripts\dockerbuild.ps1`（或 bash 版 `scripts/dockerbuild.sh`）自动计算下一个 `v*` 标签
   并推送，由 CI 完成构建与 GHCR + Quay 双仓库发布。
 - 代码同步 GitLab：`scripts\sync-gitlab.ps1`（bash 版 `scripts/sync-gitlab.sh`）双向同步私有镜像仓
@@ -39,7 +40,7 @@
   浏览器打开 http://127.0.0.1:5174 （前端）。
 - 一键启动：`scripts\dev-all.ps1 start`（四服务：AI API :8310 / CRM :8080 / AI前端 :5173 / CRM前端 :81）。
 - P4 的 M-03 建档已完成真实端到端联调；活动/任务侧、响应丢失与撤权场景仍待验收。P5 的 ASR/OCR POC 已通过，输入到 LLM 和正式业务确认链仍待闭环；P6 尚未完成。
-- Docker 镜像采用 S6 守护 API 进程，`/ready` 检查数据库与 worker；构建上下文只包含运行所需文件。CI 的 Python 测试通过后才推送镜像。运行与故障验证见[测试规范](docs/测试规范.md)。
+- Docker 镜像采用 S6 守护 API 进程，`/ready` 检查数据库与 worker；构建上下文只包含运行所需文件。CI 只负责构建推送镜像，Python 测试在本地跑（见「测试命令」）。运行与故障验证见[测试规范](docs/测试规范.md)。
 
 ## Windows 注意
 

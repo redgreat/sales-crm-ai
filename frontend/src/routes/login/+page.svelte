@@ -4,6 +4,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { ApiError, adminApi, getToken } from '$lib/admin-api';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 
 	let username = $state('');
@@ -13,7 +14,7 @@
 	let hint = $state('');
 
 	onMount(() => {
-		if (getToken()) void goto('/', { replaceState: true });
+		if (getToken()) void goto(resolve('/'), { replaceState: true });
 	});
 
 	async function submit(event: SubmitEvent) {
@@ -24,7 +25,7 @@
 		hint = '';
 		try {
 			await adminApi.login(username.trim(), password);
-			await goto('/', { replaceState: true });
+			await goto(resolve('/'), { replaceState: true });
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 401) {
 				error = '用户名或口令不正确。';

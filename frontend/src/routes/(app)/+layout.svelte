@@ -5,6 +5,7 @@
 	import { adminApi, getToken, setToken, type SessionUser } from '$lib/admin-api';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { base, resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();
@@ -32,7 +33,7 @@
 
 	onMount(() => {
 		if (!getToken()) {
-			void goto('/login', { replaceState: true });
+			void goto(resolve('/login'), { replaceState: true });
 			return;
 		}
 		void load();
@@ -46,7 +47,7 @@
 			serviceOk = await adminApi.health();
 		} catch {
 			setToken(null);
-			await goto('/login', { replaceState: true });
+			await goto(resolve('/login'), { replaceState: true });
 		} finally {
 			bootstrapping = false;
 		}
@@ -54,11 +55,16 @@
 
 	async function logout() {
 		await adminApi.logout();
-		await goto('/login', { replaceState: true });
+		await goto(resolve('/login'), { replaceState: true });
 	}
 
 	const ROLE_LABEL: Record<string, string> = { admin: '管理员', operator: '运维', viewer: '只读' };
-	let current = $derived($page.url.pathname);
+	// 挂载在 /admin 下：URL 带 base，导航项是 base 相对的路径，比较前先剥掉 base
+	function toRoutePath(pathname: string): string {
+		if (pathname === base) return '/';
+		return pathname.startsWith(`${base}/`) ? pathname.slice(base.length) : pathname;
+	}
+	let current = $derived(toRoutePath($page.url.pathname));
 	let title = $derived(NAV.find((item) => current.startsWith(item.href))?.label ?? '概览');
 </script>
 
@@ -83,7 +89,7 @@
 			{#each NAV.filter(visible) as item (item.href)}
 				{@const active = current === item.href || current.startsWith(item.href + '/')}
 				<a
-					href={item.href}
+					href={resolve(item.href)}
 					onclick={() => (menuOpen = false)}
 					class={`flex items-center gap-2 border-l-2 px-3 py-2 text-xs transition-colors ${
 						active

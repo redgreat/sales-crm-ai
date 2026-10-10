@@ -1,10 +1,11 @@
-name: CI
+name: build
 
+# 只做一件事：构建多阶段镜像并推送到 GHCR 与 Quay。
+# 仅在推送 v* 标签或手动触发时运行，因此推 main / 提 PR 不会产生记录。
+# 测试不在 CI 运行（本地执行：python -m pytest tests/）。
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -15,23 +16,8 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  tests:
-    name: Python 契约与运行时测试
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: requirements.lock
-      - run: python -m pip install -r requirements.lock
-      - run: python -m pytest tests/ -m "not realpg and not draftlive and not crmlive" -q
-
   docker:
-    name: 多阶段构建并推送 GHCR + Quay
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_type == 'tag')
-    needs: tests
+    name: 构建并推送 GHCR + Quay
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

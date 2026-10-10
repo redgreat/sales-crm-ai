@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import PageHeader from '$lib/components/admin/page-header.svelte';
 	import { ApiError, adminApi, type Connection, type SettingsSnapshot } from '$lib/admin-api';
+	import { resolve } from '$app/paths';
 
 	let snapshot = $state<SettingsSnapshot | null>(null);
 	let total = $state(0);
@@ -134,7 +135,7 @@
 					{:else}
 						<ul class="space-y-2">
 							{#each missing as spec (spec.path)}
-								{@const href = SECRET_TARGET[spec.path] ?? '/connections/model'}
+									{@const href = resolve(SECRET_TARGET[spec.path] ?? '/connections/model')}
 								<li class="flex items-start justify-between gap-3 border-b pb-2 last:border-b-0 last:pb-0">
 									<span class="block text-xs">{spec.label}</span>
 									{#if SECRET_TARGET[spec.path]}

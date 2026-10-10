@@ -52,8 +52,8 @@
 ## CI/CD
 
 - 工作流：`.github/workflows/ci.yml`
-- 触发：测试随 push 到 main / PR / `workflow_dispatch` 运行；镜像构建仅在推送 `v*` 标签或手动发起时执行
-- 流程：多阶段 Docker 构建（前端 Node.js → Python 运行时）→ 推送 GHCR 与 Quay（仅 v* 标签 / 手动触发）
+- 触发：仅推送 `v*` 标签或 `workflow_dispatch`；推 main / 提 PR 不触发（测试不在 CI 运行，本地 `pytest tests/`）
+- 流程：多阶段 Docker 构建（前端 Node.js → Python 运行时）→ 推送 GHCR 与 Quay
 - 镜像：`ghcr.io/redgreat/sales-crm-ai`、`quay.io/zrcrm/sales-crm-ai`（secrets：`QUAY_USERNAME`/`QUAY_PASSWORD`）
 - 发布脚本：`scripts\dockerbuild.ps1` / `scripts/dockerbuild.sh`（自动计算下一个 `v*` 标签并推送，触发 CI 发布镜像）
 - 部署脚本：`scripts/redeploy.sh`（服务器上执行：停容器 → 删旧镜像 → 拉新镜像 → 启动 → 健康检查。默认不改库，需迁移显式加 `--migrate`；指定版本用 `--tag vX.Y.Z`。部署目录自动定位：脚本同级的 docker-compose.yml，否则取上一级；不读环境变量，可用 `--dir` 显式覆盖）
