@@ -80,7 +80,7 @@ def test_password_hash_is_salted_and_verifiable() -> None:
 
 
 async def test_login_returns_token_and_permissions(db_pool: AsyncConnectionPool) -> None:
-    await repo.bootstrap_admin(db_pool, None, PASSWORD)
+    await repo.bootstrap_admin(db_pool, PASSWORD)
     async with await _client(db_pool) as client:
         bad = await client.post("/api/v1/auth/login", json={"username": "admin", "password": "wrong"})
         assert bad.status_code == 401
@@ -91,7 +91,7 @@ async def test_login_returns_token_and_permissions(db_pool: AsyncConnectionPool)
 
 
 async def test_settings_require_session_then_permission(db_pool: AsyncConnectionPool) -> None:
-    await repo.bootstrap_admin(db_pool, None, PASSWORD)
+    await repo.bootstrap_admin(db_pool, PASSWORD)
     await repo.create_user(db_pool, "operator-one", "operator-pass-1", "operator", "运维")
     await repo.create_user(db_pool, "viewer-one", "viewer-pass-11", "viewer", "只读")
     async with await _client(db_pool) as client:
@@ -111,7 +111,7 @@ async def test_settings_require_session_then_permission(db_pool: AsyncConnection
 
 
 async def test_tampered_and_expired_token_rejected(db_pool: AsyncConnectionPool) -> None:
-    await repo.bootstrap_admin(db_pool, None, PASSWORD)
+    await repo.bootstrap_admin(db_pool, PASSWORD)
     async with await _client(db_pool) as client:
         token = (await _login(client))["token"]
         raw, signature = token.split(".")
@@ -126,7 +126,7 @@ async def test_tampered_and_expired_token_rejected(db_pool: AsyncConnectionPool)
 
 
 async def test_reset_password_invalidates_old_token(db_pool: AsyncConnectionPool) -> None:
-    await repo.bootstrap_admin(db_pool, None, PASSWORD)
+    await repo.bootstrap_admin(db_pool, PASSWORD)
     async with await _client(db_pool) as client:
         token = (await _login(client))["token"]
         assert (await client.get("/api/v1/auth/me", headers=_auth(token))).status_code == 200
@@ -140,7 +140,7 @@ async def test_reset_password_invalidates_old_token(db_pool: AsyncConnectionPool
 
 
 async def test_disable_user_blocks_session(db_pool: AsyncConnectionPool) -> None:
-    await repo.bootstrap_admin(db_pool, None, PASSWORD)
+    await repo.bootstrap_admin(db_pool, PASSWORD)
     await repo.create_user(db_pool, "operator-two", "operator-pass-2", "operator", "运维")
     users = await repo.list_users(db_pool)
     admin_id = str(users[0]["id"])
@@ -154,7 +154,7 @@ async def test_disable_user_blocks_session(db_pool: AsyncConnectionPool) -> None
 
 
 async def test_last_admin_cannot_be_downgraded_or_removed(db_pool: AsyncConnectionPool) -> None:
-    await repo.bootstrap_admin(db_pool, None, PASSWORD)
+    await repo.bootstrap_admin(db_pool, PASSWORD)
     users = await repo.list_users(db_pool)
     admin_id = str(users[0]["id"])
     async with await _client(db_pool) as client:
@@ -168,7 +168,7 @@ async def test_last_admin_cannot_be_downgraded_or_removed(db_pool: AsyncConnecti
 
 
 async def test_change_password_rejects_wrong_old(db_pool: AsyncConnectionPool) -> None:
-    await repo.bootstrap_admin(db_pool, None, PASSWORD)
+    await repo.bootstrap_admin(db_pool, PASSWORD)
     async with await _client(db_pool) as client:
         token = (await _login(client))["token"]
         response = await client.post("/api/v1/auth/me/password", json={

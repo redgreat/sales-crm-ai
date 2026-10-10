@@ -52,7 +52,7 @@
 		try {
 			const state = await adminApi.bootstrap();
 			if (state.enabled && !state.bootstrapped) {
-				hint = '尚未创建任何账号：已自动生成管理员账号 admin，初始口令见 AI 服务目录下的 conf/admin.bootstrap.txt';
+				hint = '数据库里还没有任何账号：启动时会自动创建默认管理员 admin，初始口令见部署文档';
 			}
 		} catch {
 			// 引导探测失败不影响登录尝试

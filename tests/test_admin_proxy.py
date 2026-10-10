@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 import httpx
 from psycopg_pool import AsyncConnectionPool
 
-from app.admin import paths, repo
+from app.admin import repo
 from app.api.routes import auth as auth_routes
 from app.api.routes import playground as playground_routes
 from app.config import Settings
@@ -31,7 +31,6 @@ def build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         encoding="utf-8",
     )
     monkeypatch.setenv("SAI_CONFIG", str(conf / "config.yml"))
-    monkeypatch.setattr(paths, "PROJECT_ROOT", tmp_path)
 
     app = FastAPI()
 
@@ -80,7 +79,7 @@ def test_authorization_header_survives_proxy(tmp_path: Path, monkeypatch: pytest
 @pytest.mark.realpg
 async def test_full_login_flow_through_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                             db_pool: AsyncConnectionPool) -> None:
-    await repo.bootstrap_admin(db_pool, None, "proxy-pass-12345")
+    await repo.bootstrap_admin(db_pool, "proxy-pass-12345")
     app = build(tmp_path, monkeypatch).app
     app.state.pool = db_pool
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),

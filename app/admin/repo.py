@@ -9,9 +9,9 @@
 """
 from __future__ import annotations
 
+import os
 import secrets as _random
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -26,6 +26,10 @@ from app.errors import Conflict, NotFound, ValidationFailed
 _CONNECTION_COLUMNS = """
     id, kind, target, name, enabled, credential, config, created_at, updated_at
 """
+
+# 启动引导的默认管理员：库里没有该账号时才建，口令只存 PBKDF2 哈希（不落文件、不进日志）
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = "Lunz2017"
 
 
 def _iso(value: Any) -> str:
@@ -283,15 +287,14 @@ async def is_empty(pool: psycopg.AsyncConnectionPool) -> bool:
     return int(rows[0]["n"]) == 0
 
 
-async def bootstrap_admin(pool: psycopg.AsyncConnectionPool, hint_path: Path | None = None,
-                          password: str | None = None, username: str = "admin") -> dict[str, Any]:
-    """首次启动引导：只在没有任何账号时建号；口令来自环境变量或随机生成。
+async def bootstrap_admin(pool: psycopg.AsyncConnectionPool, password: str | None = None,
+                          username: str = DEFAULT_ADMIN_USERNAME) -> dict[str, Any]:
+    """创建默认管理员账号：口令取环境变量 SAI_ADMIN_PASSWORD，缺省 DEFAULT_ADMIN_PASSWORD。
 
-    随机口令只写进 `conf/admin.bootstrap.txt`（600）并在日志提示一次，不经 API 返回。
+    口令只在库里存 PBKDF2 哈希，不落文件、不进日志；已有同名账号时不覆盖。
     """
-    generated = password is None
-    if generated:
-        password = _random.token_urlsafe(16)
+    if password is None:
+        password = os.environ.get("SAI_ADMIN_PASSWORD") or DEFAULT_ADMIN_PASSWORD
     user_rules.check_password(password)
     user_rules.check_username(username)
     payload = {
@@ -314,31 +317,17 @@ async def bootstrap_admin(pool: psycopg.AsyncConnectionPool, hint_path: Path | N
                 )
                 if cur.rowcount == 0:
                     raise Conflict(f"账号 {username} 已存在")
-    if generated and hint_path is not None:
-        _write_hint(hint_path, username, password)
-    return {"username": username, "password": password if generated else "", "generated": generated}
+    return {"username": username, "created": True}
 
 
-def _write_hint(path: Path, username: str, password: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"首次启动自动创建的管理员账号：{username}\n初始口令：{password}\n"
-        f"请登录后立即修改，并删除本文件。\n",
-        encoding="utf-8",
+async def ensure_bootstrap(pool: psycopg.AsyncConnectionPool) -> dict[str, Any] | None:
+    """启动引导：库里没有默认管理员才建；已有账号（含改过口令的）一律不覆盖。"""
+    existing = await _one(
+        pool, "SELECT id FROM admin_users WHERE username = %s", (DEFAULT_ADMIN_USERNAME,)
     )
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
-
-
-async def ensure_bootstrap(pool: psycopg.AsyncConnectionPool,
-                           hint_path: Path | None = None) -> dict[str, Any] | None:
-    import os
-
-    if not await is_empty(pool):
+    if existing is not None:
         return None
-    return await bootstrap_admin(pool, hint_path, os.environ.get("SAI_ADMIN_PASSWORD") or None)
+    return await bootstrap_admin(pool)
 
 
 async def authenticate(pool: psycopg.AsyncConnectionPool, username: str,

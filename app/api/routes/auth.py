@@ -61,7 +61,7 @@ def _settings(request: Request) -> Settings:
 async def bootstrap_state(request: Request) -> dict[str, Any]:
     """是否还处于「没有任何账号」的首次启动状态。
 
-    只回布尔值，不回任何凭据——初始口令写在 conf/admin.bootstrap.txt 里给本机运维看。
+    只回布尔值，不回任何凭据——默认管理员账号与初始口令见部署文档（库内只存 PBKDF2 哈希）。
     """
     if not admin_enabled(_settings(request)):
         return {"enabled": False, "bootstrapped": True}

@@ -196,7 +196,7 @@ async def test_overview_reports_managed_and_credentials(db_pool: AsyncConnection
 
 
 async def test_connection_api_requires_permission_and_validates(db_pool: AsyncConnectionPool) -> None:
-    await repo.bootstrap_admin(db_pool, None, PASSWORD)
+    await repo.bootstrap_admin(db_pool, PASSWORD)
     async with await _client(db_pool) as client:
         login = await client.post("/api/v1/auth/login",
                                   json={"username": "admin", "password": PASSWORD})

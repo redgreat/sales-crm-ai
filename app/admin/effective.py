@@ -53,20 +53,20 @@ async def refresh_app_settings(request: Request) -> Settings:
 
 
 async def bootstrap_admin_account(pool: psycopg.AsyncConnectionPool, settings: Settings) -> None:
-    """首次启动引导 admin 账号；失败不影响服务启动。"""
+    """启动引导 admin 账号；失败不影响服务启动。
+
+    库里没有默认管理员账号（`admin`）才创建，口令取环境变量 SAI_ADMIN_PASSWORD，
+    缺省用内置初始口令；已有账号一律不覆盖——改过口令也以库为准。
+    """
     from app.admin import repo
-    from app.admin.paths import admin_enabled, bootstrap_hint_path
+    from app.admin.paths import admin_enabled
 
     if not admin_enabled(settings):
         return
     try:
-        created = await repo.ensure_bootstrap(pool, bootstrap_hint_path())
+        created = await repo.ensure_bootstrap(pool)
     except Exception:
         logger.warning("管理端账号引导未完成（不影响服务启动）", exc_info=True)
         return
     if created:
-        logger.warning(
-            "管理端首次启动：已创建管理员账号 %s，初始口令见 %s（请登录后立即修改并删除该文件）",
-            created["username"],
-            bootstrap_hint_path(),
-        )
+        logger.warning("管理端首次启动：已创建默认管理员账号 %s，初始口令见部署文档", created["username"])
