@@ -36,7 +36,9 @@ TARGET_LABELS: dict[str, str] = {
 # 每个分类的业务字段白名单（id/name/enabled 等通用字段另行处理）
 TARGET_FIELDS: dict[str, tuple[str, ...]] = {
     "model": ("provider", "base_url", "model", "temperature", "timeout_seconds", "max_retries"),
-    "crm": ("base_url", "key_id", "timeout_seconds"),
+    # crm：base_url/key_id/timeout_seconds 供 AI→CRM 服务间签名调用；
+    # token_endpoint/client_id/scopes 供 /h5 联调页的 OAuth 密码授权（有默认值）
+    "crm": ("base_url", "key_id", "timeout_seconds", "token_endpoint", "client_id", "scopes"),
     "ocr": ("endpoint", "type", "output_coordinate", "timeout_seconds"),
     "asr": ("model", "language_hints", "diarization_enabled"),
     "oss": ("endpoint", "bucket", "signed_url_ttl_seconds"),
@@ -57,7 +59,8 @@ FIELD_TYPES: dict[str, str] = {
 # 每个分类的凭据字段（写入 credential JSONB，只写不回显）
 TARGET_SECRETS: dict[str, tuple[str, ...]] = {
     "model": ("secret",),
-    "crm": ("secret",),
+    # secret：AI→CRM 的服务间签名密钥；client_secret：/h5 联调页 OAuth 密码授权客户端密钥
+    "crm": ("secret", "client_secret"),
     "ocr": ("access_key_id", "access_key_secret"),
     "asr": ("api_key",),
     "oss": ("access_key_id", "access_key_secret"),
@@ -69,7 +72,8 @@ TARGET_SECRETS: dict[str, tuple[str, ...]] = {
 WRITE_FIELDS = ("name", "provider", "base_url", "model", "url", "tool_name", "query_argument",
                 "temperature", "timeout_seconds", "max_retries", "key_id", "endpoint", "type",
                 "output_coordinate", "language_hints", "diarization_enabled", "bucket",
-                "signed_url_ttl_seconds", "target", "enabled", "secrets")
+                "signed_url_ttl_seconds", "token_endpoint", "client_id", "scopes",
+                "target", "enabled", "secrets")
 
 
 def _target_of(kind: str, payload: dict[str, Any], existing: dict[str, Any] | None) -> str:

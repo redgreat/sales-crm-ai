@@ -242,6 +242,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_routes.router)
     app.include_router(settings_routes.router)
     app.include_router(playground.router)
+    # H5 测试联调页（app/devtools/h5，整目录可删；与 /playground 同一开关）
+    from app.devtools.h5 import router as h5_router
+
+    app.include_router(h5_router)
     # 配置后台前端（静态 SPA，与 API 同端口）
     _install_admin_ui(app)
     return app

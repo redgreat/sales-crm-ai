@@ -10,6 +10,13 @@
 #        docker compose run --rm sales-crm-ai python scripts/init_db.py --apply
 #        docker compose run --rm sales-crm-ai python scripts/init_checkpoints.py --apply
 #   3. 启动：docker compose up -d
+#
+# 对外入口（都走同一个 8310 端口，由反代按路径分流，无需额外端口）：
+#   /admin        配置后台 SPA（开关 admin.enabled / admin.allow_prod）
+#   /h5           H5 测试联调页（仅 dev/test 且 api.playground.enabled；prod 一律 404）
+#   /playground   开发联调 API 代理（同 /h5 开关）
+#   /api/v1       业务 API（服务间 HMAC 签名）
+#   /health /ready 健康与就绪探针
 #   4. 验证：curl -f http://127.0.0.1:8310/ready （schema/checkpoint/model 三项须 ok）
 #      后台页面：http://127.0.0.1:8310/admin （已打包进镜像，无需额外部署前端）
 #

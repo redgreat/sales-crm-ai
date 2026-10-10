@@ -36,6 +36,9 @@ class ConnectionBody(BaseModel):
     tool_name: str | None = None
     query_argument: str | None = None
     key_id: str | None = None
+    token_endpoint: str | None = None
+    client_id: str | None = None
+    scopes: str | None = None
     endpoint: str | None = None
     type: str | None = None
     output_coordinate: str | None = None

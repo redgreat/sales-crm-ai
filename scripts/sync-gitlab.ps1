@@ -7,6 +7,10 @@
         .\scripts\sync-gitlab.ps1 -Tags          # 推送当前分支 + 全部标签
         .\scripts\sync-gitlab.ps1 -All -Tags     # 同步全部分支 + 全部标签
         .\scripts\sync-gitlab.ps1 -Pull          # 从 GitLab 拉取远端分支并合并到当前分支
+#
+# 反向操作（GitLab 侧已合入代码取回本地，人工合并后再推回 GitHub）：
+#   .\scripts\pull-gitlab.ps1                     # 只拉取落地，不动工作区
+#   .\scripts\pull-gitlab.ps1 -Merge -Push        # 拉取 + 合并进当前分支 + 快进推回 GitHub
 #>
 
 param(
@@ -33,6 +37,10 @@ function Show-Usage {
       .\scripts\sync-gitlab.ps1 -Tags          # 推送当前分支 + 全部标签
       .\scripts\sync-gitlab.ps1 -All -Tags     # 同步全部分支 + 全部标签
       .\scripts\sync-gitlab.ps1 -Pull          # 从 GitLab 拉取远端分支并合并到当前分支
+
+反向拉取（GitLab 已合入代码取回本地，人工合并后推回 GitHub）:
+      .\scripts\pull-gitlab.ps1                # 只拉取落地到 gitlab-<branch>，不动工作区
+      .\scripts\pull-gitlab.ps1 -Merge -Push   # 拉取 + 合并 + 快进推回 GitHub origin
 
 选项:
   -Url <string>     GitLab 仓库地址（首次需要；保存为 gitlab remote，重复传入且不同则更新）

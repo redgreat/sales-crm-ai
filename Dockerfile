@@ -41,6 +41,8 @@ COPY deploy/s6-user-bundles/ /etc/s6-overlay/user-bundles.d/
 
 # 复制配置后台前端产物（FastAPI 挂在 /admin 提供，与 API 同端口）
 COPY --from=frontend /build/frontend/build ./admin-dist
+# H5 测试联调页（单文件静态页，随镜像由 AI 服务挂在 /h5 提供）
+COPY tests/h5/index.html ./h5-dist/index.html
 
 RUN mkdir -p conf .local && chown -R nobody:nogroup /app \
     && chmod +x /etc/s6-overlay/s6-rc.d/ai-api/run

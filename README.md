@@ -21,7 +21,13 @@
   由 API 同端口挂在 `/admin`（容器访问 `http://<host>:8310/admin`），无需单独部署前端。
   开关：`admin.enabled`（总开关）+ `admin.allow_prod`（生产放行，默认关闭）；非生产环境还需
   `api.playground.enabled=true`。开发时 `npm run dev` 访问 `http://localhost:5173/admin/`。
-  业务链路继续使用 `tests/h5/` 联调页。
+   业务链路继续使用 `tests/h5/` 联调页。
+ - H5 测试联调页（随镜像部署）：同一页面已打进镜像，由 API 同端口挂在 `/h5`
+   （如 `https://<AI 域名>/h5`），与 `/playground` 同一开关：仅 dev/test 且
+   `api.playground.enabled=true`，prod 一律 404。代码集中在 `app/devtools/h5`
+   （**测试面，与业务代码隔离，清理时整目录删除**）；CRM 地址与登录凭据在配置后台
+   「外部接口 → CRM 接口」填 `base_url` 与凭据 `client_secret`（token 端点/client_id/scopes 有默认值）。
+   本地开发仍可用 `scripts/h5_server.py` 起在 8320 端口。
 - CI：`.github/workflows/ci.yml` —— 只做构建与推送，**仅在推送 `v*` 标签或手动触发时运行**（推 main / 提 PR 不触发）；
    多阶段 Docker 构建（前端编译 + Python 运行时）→ 推送 GHCR 与 Quay
    （`ghcr.io/<owner>/<repo>`、`quay.io/zrcrm/sales-crm-ai`：latest / sha / 语义版本 tag；

@@ -17,6 +17,9 @@
 !deploy/s6-user-bundles/user/
 !deploy/s6-user-bundles/user/contents.d/
 !deploy/s6-user-bundles/user/contents.d/ai-api
+# H5 测试联调页（单文件静态页，随镜像由 AI 服务挂在 /h5 提供）
+!tests/h5/
+!tests/h5/index.html
 
 # 即使位于允许目录中，也不发送本地依赖、产物或密钥。
 **/node_modules

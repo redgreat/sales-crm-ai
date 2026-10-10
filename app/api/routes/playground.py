@@ -11,6 +11,7 @@ from __future__ import annotations
 import httpx
 from fastapi import APIRouter, Request, Response
 
+from app.admin.paths import playground_enabled
 from app.auth import OperatorContext, sign_request
 from app.errors import NotFound, ValidationFailed
 
@@ -64,7 +65,7 @@ async def _forward(request: Request, forward_path: str, *, signed: bool) -> Resp
 @router.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def proxy_api(path: str, request: Request) -> Response:
     settings = request.app.state.settings
-    if not (settings.environment != "prod" and settings.api.playground.enabled):
+    if not playground_enabled(settings):
         raise NotFound("playground 联调代理未启用")
     return await _forward(request, f"/api/{path}", signed=True)
 

@@ -153,8 +153,11 @@
 const $ = (id) => document.getElementById(id);
 const LS_USER = 'ry-h5-user';
 const chatKey = (username) => `ry-h5-chat:${username}`;
-// 全部请求走同源 /crm/**（由 scripts/h5_server.py 代理到 CRM 并注入 token）
-let STATE = { base: '/crm', conversationId: null, currentCapability: 'communication.extract', viewStatus: 'PENDING_CONFIRM', candidatePage: 1, candidates: [], importedCandidates: [], customerReturn: null, createdCustomerId: null, pendingRun: null, username: '', password: '', pendingStateVersion: null, sending: false, pendingSend: null };
+// 挂载前缀：本地 scripts/h5_server.py 直接托管在根路径（''），
+// 随镜像部署时由 AI 服务挂在 /h5 下并注入 window.__H5_BASE='/h5'。
+const H5_BASE = (typeof window !== 'undefined' && window.__H5_BASE) || '';
+// 全部请求走同源 {H5_BASE}/crm/**（由 h5_server.py 或 AI 服务 /h5/crm/** 代理到 CRM 并注入 token）
+let STATE = { base: `${H5_BASE}/crm`, conversationId: null, currentCapability: 'communication.extract', viewStatus: 'PENDING_CONFIRM', candidatePage: 1, candidates: [], importedCandidates: [], customerReturn: null, createdCustomerId: null, pendingRun: null, username: '', password: '', pendingStateVersion: null, sending: false, pendingSend: null };
 let RELOGIN_TRIED = false;
 const CANDIDATE_PAGE_SIZE = 8;
 const runTimeCache = new Map();
@@ -198,7 +201,7 @@ async function api(method, path, body) {
 // ---------- 登录（账号密码 / 复用本机 token / 手动 token 应急）----------
 
 async function doLogin(username, password, silent) {
-  const r = await fetch('/__login', {
+  const r = await fetch(`${H5_BASE}/__login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password, keep_signed_in: $('keepSignedIn').checked }),
   });
@@ -250,7 +253,7 @@ async function login() {
 }
 
 async function loginReuse() {
-  const r = await fetch('/__login', {
+  const r = await fetch(`${H5_BASE}/__login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
   }).then((x) => x.json()).catch(() => ({}));
   if (r.ok) {
@@ -265,7 +268,7 @@ async function loginReuse() {
 async function loginManual() {
   const t = ($('token').value || '').trim();
   if (!t) { log('loginLog', '请粘贴 token'); return; }
-  const r = await fetch('/__login', {
+  const r = await fetch(`${H5_BASE}/__login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token: t, username: $('username').value.trim() }),
   }).then((x) => x.json()).catch(() => ({}));
@@ -274,7 +277,7 @@ async function loginManual() {
 }
 
 async function logout() {
-  await fetch('/__logout', { method: 'POST' });
+  await fetch(`${H5_BASE}/__logout`, { method: 'POST' });
   if (STATE.username) sessionStorage.removeItem(chatKey(STATE.username));
   STATE.password = ''; STATE.lastCandidate = null; STATE.conversationId = null; STATE.pendingSend = null;
   $('connStatus').textContent = '未登录';
@@ -719,7 +722,7 @@ window.addEventListener('load', async () => {
   }
   const u = localStorage.getItem(LS_USER) || 'ZR20050012';
   $('username').value = u;
-  const r = await fetch('/__session').then((x) => x.json()).catch(() => ({}));
+  const r = await fetch(`${H5_BASE}/__session`).then((x) => x.json()).catch(() => ({}));
   if (r.connected) {
     STATE.username = r.username || STATE.username;
     onConnected(r, STATE.username);

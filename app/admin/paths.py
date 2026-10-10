@@ -18,6 +18,11 @@ def admin_enabled(settings: Settings) -> bool:
     return settings.api.playground.enabled
 
 
+def playground_enabled(settings: Settings) -> bool:
+    """联调面（/playground 代理与 /h5 联调页）共用的开关：仅 dev/test 且显式开启。"""
+    return settings.environment != "prod" and settings.api.playground.enabled
+
+
 def require_admin_enabled(settings: Settings) -> None:
     from app.errors import NotFound
 

@@ -183,6 +183,9 @@ export interface Connection {
 	tool_name?: string;
 	query_argument?: string;
 	key_id?: string;
+	token_endpoint?: string;
+	client_id?: string;
+	scopes?: string;
 	endpoint?: string;
 	type?: string;
 	output_coordinate?: string;
@@ -205,6 +208,9 @@ export interface ConnectionInput {
 	tool_name?: string;
 	query_argument?: string;
 	key_id?: string;
+	token_endpoint?: string;
+	client_id?: string;
+	scopes?: string;
 	endpoint?: string;
 	type?: string;
 	output_coordinate?: string;

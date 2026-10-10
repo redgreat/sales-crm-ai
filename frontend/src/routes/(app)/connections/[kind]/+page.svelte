@@ -60,11 +60,17 @@
 			label: 'CRM 接口',
 			summary: (item) => item.base_url ?? '-',
 			fields: [
-				{ key: 'base_url', label: '服务地址', type: 'url', placeholder: 'http://crm.internal:8080/api', span: true },
+				{ key: 'base_url', label: '服务地址', type: 'url', placeholder: 'https://salescrm-api-service.lunztech.cn/api/v1/salescrm', span: true },
 				{ key: 'key_id', label: '签名 Key ID', placeholder: 'ai-crm' },
-				{ key: 'timeout_seconds', label: '超时（秒）', type: 'number', step: '1' }
+				{ key: 'timeout_seconds', label: '超时（秒）', type: 'number', step: '1' },
+				{ key: 'token_endpoint', label: 'OAuth Token 地址', type: 'url', placeholder: 'https://identity-fat.lunz.cn/connect/token', span: true },
+				{ key: 'client_id', label: 'OAuth Client ID', placeholder: 'salescrm-client' },
+				{ key: 'scopes', label: 'OAuth Scopes', placeholder: 'salescrm uc-users-outside-api', span: true }
 			],
-			secrets: noSecret('签名密钥')
+			secrets: [
+				{ key: 'secret', label: '签名密钥' },
+				{ key: 'client_secret', label: 'OAuth 客户端密钥（/h5 联调页登录用）' }
+			]
 		},
 		ocr: {
 			value: 'ocr',

@@ -17,6 +17,7 @@
 - **密钥与用量**：密钥不入库不入日志；模型 usage/费用/配额不落日志、消息、checkpoint。
 - **数据库**：AI 自有库 `zrcrm_ai` 变更走 `app/persistence/migrations/` 显式应用；**禁止直连 CRM 主库 `zrcrm`**，其表口径以 `docs/PostgreSQL数据库规范.md` 为准。
 - **前端分工**：本仓 `frontend/` 是 SvelteKit 联调页（生产默认关闭、不持密钥）；正式业务前端是 `sales-crm-admin-ui` 的 Vue 2 + element-ui，不得引入 Vue 3 门户。
+- **测试面代码隔离**：H5 测试联调页（随镜像挂在 `/h5`）只放在 `app/devtools/h5/`，不得散落到业务路由/服务层；清理时删该目录 + `main.py` 两行 + Dockerfile/.dockerignore 的 h5 条目即可（目录内 docstring 有清单）。
 - **提交前**过 `docs/前后端开发规范.md` §5 清单；§6 为红线，一律禁止。
 
 ## 实施规则
